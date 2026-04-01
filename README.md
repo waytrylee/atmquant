@@ -1,29 +1,29 @@
 # ATMQuant - 开源AI量化交易框架
 
-> 基于 vnpy 4.1 的开源AI量化交易框架，专注于图表可视化与策略研发
+> 基于 vnpy 4.1 的开源 AI 量化交易框架：多周期图表、图表内交易与风控、AI 策略引擎与指标计算管线已纳入本仓库，便于二次开发与学习。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
 ## 特性
 
-- 📊 **多周期图表系统** - 支持双图/四图视图，多时间框架对比分析
-- 📈 **技术指标库** - BOLL、SMA、EMA、MACD、RSI、DMI、成交量等常用指标
-- 🎯 **策略开发框架** - 完整的策略基类，支持回测与参数优化
-- ⚙️ **轻量配置管理** - 基于 .env 的配置系统，环境隔离
-- 📝 **中文文档** - 详细的开发文档和教程
+- **多周期图表** - 双图/四图视图、周期切换与交互（扩展 ViewBox、光标管理等）
+- **图表内交易与风控** - `TradingManager` / `PositionManager` / `RiskMonitor`：委托与持仓线可视化、止损止盈与价格预警、多合约按 `vt_symbol` 隔离状态（配合 `vnpy_charttrader` 等插件使用）
+- **AI 分析与数据采集** - `AIAnalysisCoordinator`、市场分析提示词与 `market_data_collector`，便于对接多模型做盘面解读
+- **AI 策略引擎** - `core/ai_strategy_engine/`：期货数据字典、上下文与提示词构建、决策解析/校验/执行、双层风控、品种筛选与评分、回测适配与缓存；参数集中在 `config/ai_*.py`
+- **指标计算管线** - `core/indicators/calculators/` 与图表指标解耦，策略与回测可复用同一套计算逻辑
+- **策略与回测** - 策略基类、`single_symbol_ai_strategy` 等示例路径；回测存储模型与参数管理（`core/utils/strategy_param_manager.py`、`core/models/backtest_storage_models.py`）
+- **工程配套** - 日志与告警、JSON 修复与文本工具（`utils/`）、`requirements.txt` 与 `.env` 配置入口
 
-## 进阶功能
+详细模块说明见 `core/ai_strategy_engine/README.md`、`config/README.md`。
 
-基于开源版本，我还开发了包含手动交易面板、AI分析系统和高级指标的完整版本。
+## 知识星球（进阶指标与深度内容）
 
-如果你需要这些进阶功能，可以加入知识星球获取：
+本仓库已包含上述核心工程能力。若你希望系统跟进**更高阶的指标实现、独家策略与参数经验、系列文章配套的扩展资料**，欢迎加入知识星球（内容与开源代码互补，持续更新）：
 
-- 🎮 图表化交易面板（一键下单/平仓、持仓管理）
-- 🤖 AI智能分析系统（多模型分析、信号解读）
-- 📊 高级指标库（SuperTrend、ZLEMA、斐波那契入场带等20+指标）
-- 🔧 无头指标计算器（零Qt依赖，策略专用，支持回测和实盘）
-- 📈 实战策略与代码（含参数优化经验）
+- 高级指标专题与更多品种化实现（如 SuperTrend、ZLEMA、斐波那契入场带、挤压动量、SMC 相关等深度文章配套）
+- 实战策略拆解、参数与风控思路（星球内沉淀版本）
+- 与《量化指标解码》等专栏同步的扩展阅读与答疑场景
 
 👉 加入知识星球：[量策堂·AI算法指标策略](https://t.zsxq.com/Y2m2V)
 
@@ -64,44 +64,39 @@ python main.py
 ```
 atmquant/                          # 项目根目录
 ├── 📁 core/                        # 核心业务模块
-│   ├── 📁 charts/                  # 图表组件(图表容器和UI组件)
-│   │   ├── components/            # 图表子组件
-│   │   │   ├── cursor_manager.py  # 光标管理器
-│   │   │   └── extendable_viewbox.py # 可扩展ViewBox
-│   │   ├── enhanced_chart_widget.py # 增强版图表
-│   │   ├── dual_chart_widget.py   # 双图视图
-│   │   └── quad_chart_widget.py   # 四图视图
-│   ├── 📁 indicators/              # 技术指标实现(所有技术指标)
-│   ├── 📁 data/                    # 数据处理核心
-│   ├── 📁 logging/                 # 日志和告警系统
-│   │   ├── logger_manager.py      # 日志管理器
-│   │   └── alert_manager.py       # 告警管理器
-│   └── 📁 strategies/              # 策略相关
-├── 📁 config/                      # 统一配置管理
-│   ├── settings.py                 # 轻量级配置管理
-│   └── alert_config.py             # 告警配置
-├── 📁 vnpy_chartwizard/            # K线图表模块(实时tick更新)
-├── 📁 vnpy_spreadtrading/          # 价差交易模块
-├── 📁 vnpy_tqsdk/                  # 天勤数据源
+│   ├── 📁 ai_strategy_engine/      # AI 策略引擎（schema/上下文/提示词/决策/风控/选品/回测适配）
+│   ├── 📁 charts/                  # 图表组件
+│   │   ├── components/             # 光标、可扩展 ViewBox 等
+│   │   ├── managers/               # 交易、持仓、风控、AI 分析协调
+│   │   ├── prompts/                # 市场分析类提示词
+│   │   ├── utils/                  # 行情采集等
+│   │   ├── enhanced_chart_widget.py
+│   │   ├── dual_chart_widget.py
+│   │   └── quad_chart_widget.py
+│   ├── 📁 indicators/              # 技术指标（含 calculators/ 计算子包）
+│   ├── 📁 models/                  # 领域模型（含回测存储模型）
+│   ├── 📁 utils/                   # 如 strategy_param_manager
+│   ├── 📁 data/                    # 数据处理
+│   ├── 📁 logging/                 # 日志与告警
+│   └── 📁 strategies/              # 策略基类与示例策略
+├── 📁 config/                      # 配置（settings、告警、AI/回测/指标集中配置、strategy_params）
+├── 📁 vnpy_spreadtrading/          # 价差交易模块（可选）
+├── 📁 vnpy_tqsdk/                  # 天勤数据源（可选）
 ├── 📁 scripts/                     # 运行脚本
 ├── 📁 backtests/                   # 回测相关
-├── 📁 utils/                       # 工具模块
-├── 📁 tests/                       # 测试文件
-│   ├── unit/                       # 单元测试
-│   ├── integration/                # 集成测试
-│   └── backtest/                   # 回测测试
-├── 📁 docs/                        # 文档目录
-│   ├── README.md                   # 文档中心
-│   ├── logging-system.md          # 日志系统文档
-│   └── alert-bot-setup.md         # 告警机器人配置
-├── 📁 examples/                    # 使用示例
-├── 📁 articles/                    # 公众号文章
-├── 📁 logs/                        # 日志文件
-├── 📁 vnpy/                        # VeighNa框架
-├── 📄 main.py                      # 主入口文件
-├── 📄 requirements.txt             # 依赖包
-└── 📄 README.md                    # 项目说明
+├── 📁 utils/                       # 通用工具（json_repair、文本等）
+├── 📁 tests/                       # 测试
+├── 📁 docs/                        # 文档
+├── 📁 examples/                    # 示例
+├── 📁 articles/                    # 公众号文章（若本地存在，默认不纳入版本库）
+├── 📁 logs/                        # 日志输出目录
+├── 📁 vnpy/                        # VeighNa 框架
+├── 📄 main.py                      # 主入口（CTP、CTA、回测、ChartTrader 等）
+├── 📄 requirements.txt
+└── 📄 README.md
 ```
+
+实时 K 线图表入口依赖 vnpy 生态中的 **ChartTrader** 等应用（见 `main.py` 加载项），与本仓库 `core/charts` 增强组件配合使用。
 
 ## 📚 系列文章
 
@@ -419,6 +414,6 @@ MIT License
 
 ---
 
-**本项目是《以AI量化为生》和《量化指标解码》系列教程的配套代码。**
+**本项目是《以AI量化为生》和《量化指标解码》系列教程的配套代码。** 当前仓库已同步公开原付费版中的核心系统能力（AI 策略引擎、图表交易与风控管理器、指标计算管线、集中化 AI 配置等），便于对照文章动手实验；星球侧侧重高阶指标、策略沉淀与持续更新的深度内容。
 
-如果想系统学习量化交易开发，可以关注公众号获取教程更新。
+若想系统学习量化交易开发，可关注公众号获取教程更新。
