@@ -110,6 +110,11 @@ class BarManager:
             return buf
 
         bar_list: list[BarData] = list(self._bars.values())[min_ix:max_ix + 1]
+
+        # 检查是否为空列表（缩放到没有数据的区域）
+        if not bar_list:
+            return 0, 1
+
         first_bar: BarData = bar_list[0]
         max_price: float = first_bar.high_price
         min_price: float = first_bar.low_price
@@ -141,6 +146,10 @@ class BarManager:
             return buf
 
         bar_list: list[BarData] = list(self._bars.values())[min_ix:max_ix + 1]
+
+        # 检查是否为空列表（缩放到没有数据的区域）
+        if not bar_list:
+            return 0, 1
 
         first_bar: BarData = bar_list[0]
         max_volume = first_bar.volume

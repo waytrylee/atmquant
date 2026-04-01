@@ -10,23 +10,14 @@ import numpy as np
 from vnpy.trader.ui import QtWidgets, QtCore, QtGui
 
 
-class EnhancedStatisticsMonitor(QtWidgets.QTableWidget):
+class EnhancedStatisticsMonitor(QtWidgets.QWidget):
     """
-    增强的统计指标监控器
-    显示更多回测指标包括增强的交易统计
+    增强的统计指标监控器 - 双列布局
+    左列显示核心指标，右列显示辅助指标
     """
 
-    # 分组显示的指标映射
-    GROUPED_INDICATORS = {
-        "【基础信息】": [
-            ("start_date", "首个交易日"),
-            ("end_date", "最后交易日"),
-            ("total_days", "总交易日"),
-            ("profit_days", "盈利交易日"),
-            ("loss_days", "亏损交易日"),
-            ("capital", "起始资金"),
-            ("end_balance", "结束资金"),
-        ],
+    # 左列指标分组 - 核心指标（22项）
+    LEFT_INDICATORS = {
         "【收益指标】": [
             ("total_return", "总收益率"),
             ("annual_return", "年化收益"),
@@ -56,6 +47,22 @@ class EnhancedStatisticsMonitor(QtWidgets.QTableWidget):
             ("max_consecutive_losses", "最大连续亏损次数"),
             ("optimal_position_ratio", "最优仓位比例"),
         ],
+        "【综合评分】": [
+            ("overall_rating", "综合评分"),
+        ],
+    }
+
+    # 右列指标分组 - 辅助指标（23项）
+    RIGHT_INDICATORS = {
+        "【基础信息】": [
+            ("start_date", "首个交易日"),
+            ("end_date", "最后交易日"),
+            ("total_days", "总交易日"),
+            ("profit_days", "盈利交易日"),
+            ("loss_days", "亏损交易日"),
+            ("capital", "起始资金"),
+            ("end_balance", "结束资金"),
+        ],
         "【持仓统计】": [
             ("average_holding_time_days", "平均持仓时间(天)"),
             ("max_holding_time_days", "最大持仓时间(天)"),
@@ -67,23 +74,25 @@ class EnhancedStatisticsMonitor(QtWidgets.QTableWidget):
             ("total_slippage", "总滑点"),
             ("total_turnover", "总成交额"),
             ("total_trade_count", "总成交笔数"),
+            ("long_trade_count", "多头笔数"),
+            ("short_trade_count", "空头笔数"),
             ("daily_commission", "日均手续费"),
             ("daily_slippage", "日均滑点"),
             ("daily_turnover", "日均成交额"),
             ("daily_trade_count", "日均成交笔数"),
-        ],
-        "【综合评分】": [
-            ("overall_rating", "综合评分"),
         ],
         "【统计数据】": [
             ("monthly_statistics", "月度统计数据"),
             ("interval_statistics", "半小时区间统计"),
         ],
     }
-    
+
     # 为了向后兼容，保留原有的KEY_NAME_MAP
     KEY_NAME_MAP = {}
-    for group_items in GROUPED_INDICATORS.values():
+    for group_items in LEFT_INDICATORS.values():
+        for key, name in group_items:
+            KEY_NAME_MAP[key] = name
+    for group_items in RIGHT_INDICATORS.values():
         for key, name in group_items:
             KEY_NAME_MAP[key] = name
 
@@ -93,64 +102,93 @@ class EnhancedStatisticsMonitor(QtWidgets.QTableWidget):
 
         self.cells: Dict[str, QtWidgets.QTableWidgetItem] = {}
 
+        # 创建左右两个表格
+        self.left_table = QtWidgets.QTableWidget()
+        self.right_table = QtWidgets.QTableWidget()
+
         self.init_ui()
 
     def init_ui(self) -> None:
         """"""
-        # 计算总行数（包括分组标题行）
-        total_rows = sum(len(items) + 1 for items in self.GROUPED_INDICATORS.values())
-        self.setRowCount(total_rows)
-        
-        # 创建分组显示的标签列表
-        labels = []
-        current_row = 0
-        
-        for group_name, group_items in self.GROUPED_INDICATORS.items():
-            # 分组标题行的垂直标题为空（因为分组名称显示在数据单元格中）
-            labels.append("")
-            current_row += 1
-            
-            # 添加分组内的指标
-            for key, name in group_items:
-                labels.append(name)  # 不再缩进，因为分组已经很明显了
-                current_row += 1
-        
-        self.setVerticalHeaderLabels(labels)
+        # 创建水平布局
+        layout = QtWidgets.QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(5)
 
-        self.setColumnCount(1)
-        self.horizontalHeader().setVisible(False)
-        self.horizontalHeader().setSectionResizeMode(
+        # 初始化左表格（核心指标）
+        self._init_table(self.left_table, self.LEFT_INDICATORS)
+
+        # 初始化右表格（辅助指标）
+        self._init_table(self.right_table, self.RIGHT_INDICATORS)
+
+        # 设置宽度比例 55:45
+        layout.addWidget(self.left_table, 55)
+        layout.addWidget(self.right_table, 45)
+
+        self.setLayout(layout)
+
+    def _init_table(
+        self,
+        table: QtWidgets.QTableWidget,
+        indicators: Dict[str, List[tuple]]
+    ) -> None:
+        """初始化单个表格"""
+        # 计算总行数（包括分组标题行）
+        total_rows = sum(len(items) + 1 for items in indicators.values())
+        table.setRowCount(total_rows)
+
+        # 设置列
+        table.setColumnCount(1)
+        table.horizontalHeader().setVisible(False)
+        table.horizontalHeader().setSectionResizeMode(
             QtWidgets.QHeaderView.Stretch
         )
-        self.setEditTriggers(self.EditTrigger.NoEditTriggers)
+        table.setEditTriggers(table.EditTrigger.NoEditTriggers)
 
-        # 创建单元格，包括分组标题和数据行
+        # 设置样式
+        table.setAlternatingRowColors(True)
+        table.verticalHeader().setDefaultSectionSize(20)  # 数据行高度
+
+        # 设置字体
+        font = table.font()
+        font.setPointSize(11)
+        table.setFont(font)
+
+        # 创建标签和单元格
+        labels = []
         current_row = 0
-        
-        for group_name, group_items in self.GROUPED_INDICATORS.items():
-            # 创建分组标题行 - 在数据单元格中显示分组名称
-            group_cell = QtWidgets.QTableWidgetItem()
-            group_cell.setText(group_name)  # 在数据单元格中显示分组名称
-            group_cell.setTextAlignment(QtCore.Qt.AlignCenter)  # 居中显示
-            group_cell.setFlags(QtCore.Qt.ItemIsEnabled)  # 不可选择
+
+        for group_name, group_items in indicators.items():
+            # 分组标题行
+            labels.append("")
+            group_cell = QtWidgets.QTableWidgetItem(group_name)
+            group_cell.setTextAlignment(QtCore.Qt.AlignCenter)
+            group_cell.setFlags(QtCore.Qt.ItemIsEnabled)
+
+            # 分组标题加粗
             font = group_cell.font()
-            font.setBold(True)  # 加粗字体
+            font.setBold(True)
             group_cell.setFont(font)
-            self.setItem(current_row, 0, group_cell)
+
+            table.setItem(current_row, 0, group_cell)
+            table.setRowHeight(current_row, 24)  # 分组标题行高度
             current_row += 1
-            
-            # 创建分组内的数据行
+
+            # 数据行
             for key, name in group_items:
+                labels.append(name)
                 cell = QtWidgets.QTableWidgetItem()
-                self.setItem(current_row, 0, cell)
+                table.setItem(current_row, 0, cell)
                 self.cells[key] = cell
-                
-                # 为月度统计数据和区间统计数据设置特殊格式
+
+                # 特殊处理统计数据
                 if key in ["monthly_statistics", "interval_statistics"]:
                     cell.setTextAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
                     cell.setFlags(cell.flags() | QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
-                
+
                 current_row += 1
+
+        table.setVerticalHeaderLabels(labels)
 
     def clear_data(self) -> None:
         """"""
@@ -161,11 +199,22 @@ class EnhancedStatisticsMonitor(QtWidgets.QTableWidget):
         """"""
         data = copy(data)
 
-        # 特殊处理统计数据的格式
+        # 特殊处理统计数据的格式 - 使用 DataFrame.to_string()
+        # 注意：不修改原始数据，只转换用于显示的字符串
         for key in ["monthly_statistics", "interval_statistics"]:
-            if key in data and data[key]:
-                formatted_data = data[key].replace("\n", "\n\n")  # 增加行间距
-                data[key] = formatted_data
+            if key in data and data[key] is not None:
+                # 创建显示用的字符串，但不修改原始数据
+                display_value = ""
+                # 如果是 DataFrame，使用 to_string(index=False)
+                if hasattr(data[key], 'to_string'):
+                    display_value = data[key].to_string(index=False)
+                # 如果不是字符串，转换为字符串
+                elif not isinstance(data[key], str):
+                    display_value = str(data[key])
+                else:
+                    display_value = data[key]
+                # 保存显示用的字符串（使用特殊键名）
+                data[f"{key}_display"] = display_value
 
         # 格式化数值数据
         format_map = {
@@ -202,7 +251,12 @@ class EnhancedStatisticsMonitor(QtWidgets.QTableWidget):
             "profit_factor": "{:.2f}",
             "average_trade": "{:,.2f}",
             "overall_rating": "{:.4f}",
+
+            # 持仓时间统计
             "average_holding_time_days": "{:.2f}",
+            "max_holding_time_days": "{:.2f}",
+            "min_holding_time_days": "{:.2f}",
+            "median_holding_time_days": "{:.2f}",
 
             # 整数格式 - 处理可能的NaN值
             "max_consecutive_wins": "int",
@@ -232,18 +286,30 @@ class EnhancedStatisticsMonitor(QtWidgets.QTableWidget):
 
         # 更新单元格内容
         for key, cell in self.cells.items():
-            value = data.get(key, "")
+            # 对于统计数据，使用显示用的字符串
+            if key in ["monthly_statistics", "interval_statistics"]:
+                value = data.get(f"{key}_display", "")
+            else:
+                value = data.get(key, "")
             cell.setText(str(value))
 
             # 如果是统计数据，自动调整行高
             if key in ["monthly_statistics", "interval_statistics"] and value:
-                metrics = QtGui.QFontMetrics(cell.font())
-                text_height = metrics.boundingRect(
-                    0, 0, self.columnWidth(0), 1000,
-                    QtCore.Qt.TextWordWrap | QtCore.Qt.AlignLeft,
-                    str(value)
-                ).height()
-                self.setRowHeight(self.row(cell), text_height + 20)
+                # 找到该单元格所在的表格
+                table = None
+                for row in range(self.right_table.rowCount()):
+                    if self.right_table.item(row, 0) == cell:
+                        table = self.right_table
+                        break
+
+                if table:
+                    metrics = QtGui.QFontMetrics(cell.font())
+                    text_height = metrics.boundingRect(
+                        0, 0, table.columnWidth(0), 1000,
+                        QtCore.Qt.TextWordWrap | QtCore.Qt.AlignLeft,
+                        str(value)
+                    ).height()
+                    table.setRowHeight(table.row(cell), text_height + 20)
 
 
 class NumericTableWidgetItem(QtWidgets.QTableWidgetItem):
@@ -612,11 +678,11 @@ class EnhancedOptimizationResultMonitor(QtWidgets.QDialog):
         from datetime import datetime
         
         # 获取当前项目的绝对目录
-        # 当前文件路径: /path/to/atmquant/vnpy_ctabacktester/ui/enhanced_widget.py
-        # 需要向上2级到达项目根目录: /path/to/atmquant/
+        # 当前文件路径: /path/to/ATMTrader/vnpy_ctabacktester/ui/enhanced_widget.py
+        # 需要向上2级到达项目根目录: /path/to/ATMTrader/
         current_file_dir = os.path.dirname(os.path.abspath(__file__))  # .../vnpy_ctabacktester/ui/
         vnpy_ctabacktester_dir = os.path.dirname(current_file_dir)  # .../vnpy_ctabacktester/
-        project_root = os.path.dirname(vnpy_ctabacktester_dir)  # .../atmquant/
+        project_root = os.path.dirname(vnpy_ctabacktester_dir)  # .../ATMTrader/
         results_dir = os.path.join(project_root, "backtests", "results")
         
         # 创建results目录（如果不存在）
@@ -663,11 +729,11 @@ class EnhancedOptimizationResultMonitor(QtWidgets.QDialog):
         from datetime import datetime
         
         # 获取当前项目的绝对目录
-        # 当前文件路径: /path/to/atmquant/vnpy_ctabacktester/ui/enhanced_widget.py
-        # 需要向上2级到达项目根目录: /path/to/atmquant/
+        # 当前文件路径: /path/to/ATMTrader/vnpy_ctabacktester/ui/enhanced_widget.py
+        # 需要向上2级到达项目根目录: /path/to/ATMTrader/
         current_file_dir = os.path.dirname(os.path.abspath(__file__))  # .../vnpy_ctabacktester/ui/
         vnpy_ctabacktester_dir = os.path.dirname(current_file_dir)  # .../vnpy_ctabacktester/
-        project_root = os.path.dirname(vnpy_ctabacktester_dir)  # .../atmquant/
+        project_root = os.path.dirname(vnpy_ctabacktester_dir)  # .../ATMTrader/
         reports_dir = os.path.join(project_root, "backtests", "reports")
         
         # 创建reports目录（如果不存在）
@@ -701,6 +767,206 @@ class EnhancedOptimizationResultMonitor(QtWidgets.QDialog):
                         f.write("\n\n")
 
             QtWidgets.QMessageBox.information(self, "导出成功", f"详细报告已导出到: {path}")
-            
+
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "导出失败", f"导出过程中发生错误: {str(e)}")
+
+
+class MonthlyStatisticsChartWidget(QtWidgets.QWidget):
+    """月度统计图表组件 - 使用 matplotlib"""
+
+    def __init__(self):
+        super().__init__()
+        self.monthly_data = None
+        self.canvas = None
+        self.init_ui()
+
+    def init_ui(self):
+        """初始化界面"""
+        layout = QtWidgets.QVBoxLayout()
+        layout.setContentsMargins(10, 10, 10, 10)
+        self.setLayout(layout)
+
+    def update_data(self, monthly_statistics):
+        """更新月度统计数据"""
+        if monthly_statistics is None:
+            return
+
+        # 如果是 DataFrame，转换为 dict
+        if hasattr(monthly_statistics, 'to_dict'):
+            # DataFrame 转换为 dict，每行作为一个字典
+            self.monthly_data = monthly_statistics.to_dict('index')
+        else:
+            self.monthly_data = monthly_statistics
+
+        self.plot_chart()
+
+    def plot_chart(self):
+        """绘制图表"""
+        if not self.monthly_data:
+            return
+
+        try:
+            import matplotlib.pyplot as plt
+            from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+            from matplotlib.figure import Figure
+            import matplotlib
+            matplotlib.use('Qt5Agg')
+
+            # 清除旧的 canvas
+            if self.canvas:
+                self.layout().removeWidget(self.canvas)
+                self.canvas.deleteLater()
+                self.canvas = None
+
+            # 准备数据
+            months = []
+            pnl_values = []
+
+            for month, stats in sorted(self.monthly_data.items()):
+                if isinstance(stats, dict):
+                    months.append(str(month))
+                    pnl_values.append(stats.get('total_pnl', 0))
+
+            if not months:
+                return
+
+            # 创建图表
+            fig = Figure(figsize=(8, 4), facecolor='white')
+            ax = fig.add_subplot(111)
+            ax.set_facecolor('white')
+
+            # 绘制柱状图
+            colors = ['green' if v >= 0 else 'red' for v in pnl_values]
+            ax.bar(months, pnl_values, color=colors, alpha=0.7)
+
+            # 设置样式
+            ax.set_ylabel('盈亏 (元)', fontsize=10)
+            ax.set_xlabel('月份', fontsize=10)
+            ax.set_title('月度统计', fontsize=12, fontweight='bold')
+            ax.tick_params(labelsize=9)
+            ax.grid(True, alpha=0.3)
+
+            # 添加零线
+            ax.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+
+            # 旋转 x 轴标签
+            plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+            fig.tight_layout()
+
+            # 创建 canvas 并添加到布局
+            self.canvas = FigureCanvas(fig)
+            self.layout().addWidget(self.canvas)
+            self.canvas.draw()
+
+        except Exception as e:
+            print(f"绘制月度统计图表失败: {e}")
+
+    def clear_data(self):
+        """清空数据"""
+        self.monthly_data = None
+        if self.canvas:
+            self.layout().removeWidget(self.canvas)
+            self.canvas.deleteLater()
+            self.canvas = None
+
+
+class IntervalStatisticsChartWidget(QtWidgets.QWidget):
+    """半小时区间统计图表组件 - 使用 matplotlib"""
+
+    def __init__(self):
+        super().__init__()
+        self.interval_data = None
+        self.canvas = None
+        self.init_ui()
+
+    def init_ui(self):
+        """初始化界面"""
+        layout = QtWidgets.QVBoxLayout()
+        layout.setContentsMargins(10, 10, 10, 10)
+        self.setLayout(layout)
+
+    def update_data(self, interval_statistics):
+        """更新区间统计数据"""
+        if interval_statistics is None:
+            return
+
+        # 如果是 DataFrame，转换为 dict
+        if hasattr(interval_statistics, 'to_dict'):
+            # DataFrame 转换为 dict，每行作为一个字典
+            self.interval_data = interval_statistics.to_dict('index')
+        else:
+            self.interval_data = interval_statistics
+
+        self.plot_chart()
+
+    def plot_chart(self):
+        """绘制图表"""
+        if not self.interval_data:
+            return
+
+        try:
+            import matplotlib.pyplot as plt
+            from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+            from matplotlib.figure import Figure
+            import matplotlib
+            matplotlib.use('Qt5Agg')
+
+            # 清除旧的 canvas
+            if self.canvas:
+                self.layout().removeWidget(self.canvas)
+                self.canvas.deleteLater()
+                self.canvas = None
+
+            # 准备数据
+            intervals = []
+            pnl_values = []
+
+            for interval, stats in sorted(self.interval_data.items()):
+                if isinstance(stats, dict):
+                    intervals.append(str(interval))
+                    pnl_values.append(stats.get('total_pnl', 0))
+
+            if not intervals:
+                return
+
+            # 创建图表
+            fig = Figure(figsize=(10, 4), facecolor='white')
+            ax = fig.add_subplot(111)
+            ax.set_facecolor('white')
+
+            # 绘制柱状图
+            colors = ['green' if v >= 0 else 'red' for v in pnl_values]
+            ax.bar(intervals, pnl_values, color=colors, alpha=0.7)
+
+            # 设置样式
+            ax.set_ylabel('盈亏 (元)', fontsize=10)
+            ax.set_xlabel('时间区间', fontsize=10)
+            ax.set_title('半小时区间统计', fontsize=12, fontweight='bold')
+            ax.tick_params(labelsize=9)
+            ax.grid(True, alpha=0.3)
+
+            # 添加零线
+            ax.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+
+            # 旋转 x 轴标签
+            plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+            fig.tight_layout()
+
+            # 创建 canvas 并添加到布局
+            self.canvas = FigureCanvas(fig)
+            self.layout().addWidget(self.canvas)
+            self.canvas.draw()
+
+        except Exception as e:
+            print(f"绘制区间统计图表失败: {e}")
+
+    def clear_data(self):
+        """清空数据"""
+        self.interval_data = None
+        if self.canvas:
+            self.layout().removeWidget(self.canvas)
+            self.canvas.deleteLater()
+            self.canvas = None

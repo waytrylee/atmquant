@@ -10,6 +10,173 @@ from vnpy.trader.object import TradeData
 from vnpy.trader.constant import Direction
 
 
+def calculate_daily_trading_hours(vt_symbol: str) -> float:
+    """
+    计算品种每日实际交易时长（小时）
+
+    注意：这里返回的是实际交易时间，不包含休息时间。
+
+    Args:
+        vt_symbol: 品种代码，如 "rb2605.SHFE"
+
+    Returns:
+        每日交易时长（小时），默认返回24（对于未知品种）
+    """
+    try:
+        from vnpy.trader.utility import extract_vt_symbol
+    except ImportError:
+        return 24.0
+
+    try:
+        symbol, exchange = extract_vt_symbol(vt_symbol)
+        exchange_str = exchange.value if hasattr(exchange, 'value') else str(exchange)
+        symbol_upper = symbol.upper()
+        exchange_upper = exchange_str.upper()
+
+        # 中国期货日盘实际交易时长（不含休息时间）
+        # 9:00-10:15(75分钟) + 10:30-11:30(60分钟) + 13:30-15:00(90分钟) = 225分钟 = 3.75小时
+        CN_DAY_SESSION_HOURS = 3.75
+
+        # 中国期货夜盘时长（按品种分类）
+        # 格式：{品种前缀: 夜盘时长(小时)}
+        CN_NIGHT_SESSION_HOURS = {
+            # 无夜盘品种
+            "无": 0,
+
+            # 夜盘到23:00的品种（2小时）
+            "23:00": 2.0,
+            # 螺纹钢、热卷、线材、燃油、纸浆、橡胶、沥青、焦煤、焦炭、动力煤、铁矿石等
+
+            # 夜盘到01:00的品种（4小时）
+            "01:00": 4.0,
+            # 铜、铝、锌、铅、镍、锡、不锈钢、甲醇、PTA、棉花、白糖、菜油、菜粕、玻璃、纯碱、短纤等
+
+            # 夜盘到02:30的品种（5.5小时）
+            "02:30": 5.5,
+            # 黄金、白银、原油
+        }
+
+        # 品种夜盘收盘时间映射
+        NIGHT_CLOSE_MAP = {
+            # 上期所 (SHFE)
+            "RB": "23:00",  # 螺纹钢
+            "HC": "23:00",  # 热卷
+            "WR": "23:00",  # 线材
+            "FU": "01:00",  # 燃油
+            "SP": "23:00",  # 纸浆
+            "RU": "23:00",  # 橡胶
+            "BU": "23:00",  # 沥青
+            "CU": "01:00",  # 铜
+            "AL": "01:00",  # 铝
+            "ZN": "01:00",  # 锌
+            "PB": "01:00",  # 铅
+            "NI": "01:00",  # 镍
+            "SN": "01:00",  # 锡
+            "SS": "01:00",  # 不锈钢
+            "AU": "02:30",  # 黄金
+            "AG": "02:30",  # 白银
+            "AD": "01:00",  # 铸造铝
+            "AO": "01:00",  # 氧化铝
+            "BR": "23:00",  # 丁二烯橡胶
+
+            # 上期能源 (INE)
+            "SC": "02:30",  # 原油
+            "NR": "23:00",  # 20号胶
+            "LU": "23:00",  # 低硫燃油
+            "BC": "01:00",  # 国际铜
+            "EC": "无",     # 集运指数（无夜盘）
+
+            # 大商所 (DCE)
+            "J": "23:00",   # 焦炭
+            "JM": "23:00",  # 焦煤
+            "ZC": "23:00",  # 动力煤（郑商所品种，但代码在DCE也有）
+            "I": "23:00",   # 铁矿石
+            "A": "23:00",   # 豆一
+            "B": "23:00",   # 豆二
+            "M": "23:00",   # 豆粕
+            "Y": "23:00",   # 豆油
+            "P": "23:00",   # 棕榈油
+            "C": "23:00",   # 玉米
+            "CS": "23:00",  # 淀粉
+            "JD": "23:00",  # 鸡蛋
+            "L": "23:00",   # 塑料
+            "V": "23:00",   # PVC
+            "PP": "23:00",  # 聚丙烯
+            "EB": "23:00",  # 苯乙烯
+            "EG": "23:00",  # 乙二醇
+            "PG": "01:00",  # 液化石油气
+            "BB": "无",     # 胶合板（无夜盘）
+            "BZ": "无",     # 苯（无夜盘）
+            "FB": "无",     # 纤维板（无夜盘）
+            "LG": "无",     # 原木（无夜盘）
+            "LH": "无",     # 生猪（无夜盘）
+            "RR": "无",     # 粳米（无夜盘）
+
+            # 郑商所 (CZCE)
+            "SR": "23:00",  # 白糖
+            "CF": "23:00",  # 棉花
+            "TA": "23:00",  # PTA
+            "MA": "23:00",  # 甲醇
+            "FG": "23:00",  # 玻璃
+            "SA": "23:00",  # 纯碱
+            "OI": "23:00",  # 菜油
+            "RM": "23:00",  # 菜粕
+            "PF": "23:00",  # 短纤
+            "AP": "无",     # 苹果（无夜盘）
+            "CJ": "无",     # 红枣（无夜盘）
+            "UR": "23:00",  # 尿素
+            "SF": "无",     # 硅铁（无夜盘）
+            "SM": "无",     # 锰硅（无夜盘）
+            "CY": "23:00",  # 棉纱
+            "JR": "无",     # 粳稻（无夜盘）
+            "LR": "无",     # 晚籼稻（无夜盘）
+            "PK": "无",     # 花生（无夜盘）
+            "PM": "无",     # 普麦（无夜盘）
+            "PR": "23:00",  # 瓶片
+            "PX": "23:00",  # 对二甲苯
+            "RI": "无",     # 早籼稻（无夜盘）
+            "RS": "无",     # 菜籽（无夜盘）
+            "WH": "无",     # 强麦（无夜盘）
+
+            # 广期所 (GFEX)
+            "SI": "23:00",  # 工业硅
+            "LC": "23:00",  # 碳酸锂
+            "PS": "无",     # 聚苯乙烯（无夜盘）
+        }
+
+        # 中金所品种（无夜盘）
+        if exchange_upper == "CFFEX":
+            # 9:30-11:30(2小时) + 13:00-15:00(2小时) = 4小时
+            return 4.0
+
+        # 中国期货市场
+        if exchange_upper in ["SHFE", "DCE", "CZCE", "INE", "GFEX"]:
+            # 获取品种前缀（去掉月份数字）
+            prefix = ""
+            for char in symbol_upper:
+                if char.isalpha():
+                    prefix += char
+                else:
+                    break
+
+            # 查找夜盘收盘时间
+            night_close = NIGHT_CLOSE_MAP.get(prefix, "23:00")  # 默认到23:00
+            night_hours = CN_NIGHT_SESSION_HOURS.get(night_close, 2.0)
+
+            return CN_DAY_SESSION_HOURS + night_hours
+
+        # A股市场
+        if exchange_upper in ["SSE", "SZSE"]:
+            # 9:30-11:30(2小时) + 13:00-15:00(2小时) = 4小时
+            return 4.0
+
+        # 其他市场默认24小时
+        return 24.0
+
+    except Exception:
+        return 24.0  # 出错时返回默认值
+
+
 def generate_trade_pairs(trades: List[TradeData]) -> List[Dict]:
     """
     生成交易配对，用于计算交易级别的统计指标
@@ -59,10 +226,18 @@ def generate_trade_pairs(trades: List[TradeData]) -> List[Dict]:
     return trade_pairs
 
 
-def calculate_trade_statistics(trade_pairs: List[Dict], size: float) -> Dict:
+def calculate_trade_statistics(trade_pairs: List[Dict], size: float, vt_symbol: str = "") -> Dict:
     """
     计算交易级别的统计指标
+
+    Args:
+        trade_pairs: 交易配对列表
+        size: 合约乘数
+        vt_symbol: 品种代码，用于计算准确的持仓天数
     """
+    # 计算品种每日实际交易时长
+    daily_trading_hours = calculate_daily_trading_hours(vt_symbol) if vt_symbol else 24.0
+
     if not trade_pairs:
         return {
             "win_rate": 0.0,
@@ -79,7 +254,9 @@ def calculate_trade_statistics(trade_pairs: List[Dict], size: float) -> Dict:
             "average_holding_time_hours": 0.0,
             "max_holding_time_hours": 0.0,
             "min_holding_time_hours": 0.0,
-            "median_holding_time_hours": 0.0
+            "median_holding_time_hours": 0.0,
+            # 每日交易时长（用于调试和显示）
+            "daily_trading_hours": daily_trading_hours
         }
 
     # 计算每笔交易的盈亏和统计多头空头笔数
@@ -144,12 +321,13 @@ def calculate_trade_statistics(trade_pairs: List[Dict], size: float) -> Dict:
     max_holding_time_hours = np.max(holding_times) if holding_times else 0
     min_holding_time_hours = np.min(holding_times) if holding_times else 0
     median_holding_time_hours = np.median(holding_times) if holding_times else 0
-    
-    # 转换为天为单位（24小时=1天）
-    average_holding_time_days = average_holding_time_hours / 24
-    max_holding_time_days = max_holding_time_hours / 24
-    min_holding_time_days = min_holding_time_hours / 24
-    median_holding_time_days = median_holding_time_hours / 24
+
+    # 转换为天为单位（使用品种每日实际交易时长）
+    # 例如：螺纹钢每日交易约10小时，则持仓10小时 = 1个交易日
+    average_holding_time_days = average_holding_time_hours / daily_trading_hours
+    max_holding_time_days = max_holding_time_hours / daily_trading_hours
+    min_holding_time_days = min_holding_time_hours / daily_trading_hours
+    median_holding_time_days = median_holding_time_hours / daily_trading_hours
 
     return {
         "win_rate": win_rate,
@@ -167,11 +345,13 @@ def calculate_trade_statistics(trade_pairs: List[Dict], size: float) -> Dict:
         "max_holding_time_hours": max_holding_time_hours,
         "min_holding_time_hours": min_holding_time_hours,
         "median_holding_time_hours": median_holding_time_hours,
-        # 天为单位的持仓时间
+        # 天为单位的持仓时间（基于品种实际交易时长）
         "average_holding_time_days": average_holding_time_days,
         "max_holding_time_days": max_holding_time_days,
         "min_holding_time_days": min_holding_time_days,
-        "median_holding_time_days": median_holding_time_days
+        "median_holding_time_days": median_holding_time_days,
+        # 每日交易时长（用于调试和显示）
+        "daily_trading_hours": daily_trading_hours
     }
 
 

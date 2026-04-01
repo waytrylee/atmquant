@@ -700,10 +700,10 @@ class StatisticsMonitor(QtWidgets.QTableWidget):
         """"""
         data["capital"] = f"{data['capital']:,.2f}"
         data["end_balance"] = f"{data['end_balance']:,.2f}"
-        data["total_return"] = f"{data['total_return']:,.2f}%"
-        data["annual_return"] = f"{data['annual_return']:,.2f}%"
+        data["total_return"] = f"{data['total_return']:.2f}%"
+        data["annual_return"] = f"{data['annual_return']:.2f}%"
         data["max_drawdown"] = f"{data['max_drawdown']:,.2f}"
-        data["max_ddpercent"] = f"{data['max_ddpercent']:,.2f}%"
+        data["max_ddpercent"] = f"{data['max_ddpercent']:.2f}%"
         data["total_net_pnl"] = f"{data['total_net_pnl']:,.2f}"
         data["total_commission"] = f"{data['total_commission']:,.2f}"
         data["total_slippage"] = f"{data['total_slippage']:,.2f}"
@@ -713,8 +713,8 @@ class StatisticsMonitor(QtWidgets.QTableWidget):
         data["daily_slippage"] = f"{data['daily_slippage']:,.2f}"
         data["daily_turnover"] = f"{data['daily_turnover']:,.2f}"
         data["daily_trade_count"] = f"{data['daily_trade_count']:,.2f}"
-        data["daily_return"] = f"{data['daily_return']:,.2f}%"
-        data["return_std"] = f"{data['return_std']:,.2f}%"
+        data["daily_return"] = f"{data['daily_return']:.2f}%"
+        data["return_std"] = f"{data['return_std']:.2f}%"
         data["sharpe_ratio"] = f"{data['sharpe_ratio']:,.2f}"
         data["ewm_sharpe"] = f"{data['ewm_sharpe']:,.2f}"
         data["return_drawdown_ratio"] = f"{data['return_drawdown_ratio']:,.2f}"
@@ -730,13 +730,14 @@ class BacktestingSettingEditor(QtWidgets.QDialog):
     """
 
     def __init__(
-        self, class_name: str, parameters: dict
+        self, class_name: str, parameters: dict, vt_symbol: str = ""
     ) -> None:
         """"""
         super().__init__()
 
         self.class_name: str = class_name
         self.parameters: dict = parameters
+        self.vt_symbol: str = vt_symbol
         self.edits: dict = {}
 
         self.init_ui()
@@ -748,6 +749,11 @@ class BacktestingSettingEditor(QtWidgets.QDialog):
         # Add vt_symbol and name edit if add new strategy
         self.setWindowTitle(_("策略参数配置：{}").format(self.class_name))
         button_text: str = _("确定")
+
+        # 如果有 vt_symbol，尝试加载最优参数
+        if self.vt_symbol:
+            self._load_optimized_params()
+
         parameters: dict = self.parameters
 
         for name, value in parameters.items():
@@ -779,6 +785,61 @@ class BacktestingSettingEditor(QtWidgets.QDialog):
         vbox: QtWidgets.QVBoxLayout = QtWidgets.QVBoxLayout()
         vbox.addWidget(scroll)
         self.setLayout(vbox)
+
+    def _load_optimized_params(self) -> None:
+        """从配置文件加载最优参数"""
+        try:
+            print(f"\n=== 开始加载最优参数 ===")
+            print(f"策略类名: {self.class_name}")
+            print(f"品种代码: {self.vt_symbol}")
+
+            # 延迟导入避免循环依赖
+            import sys
+            from pathlib import Path
+            project_root = Path(__file__).parent.parent.parent
+            if str(project_root) not in sys.path:
+                sys.path.insert(0, str(project_root))
+
+            from core.utils.strategy_param_manager import get_param_manager
+
+            param_manager = get_param_manager()
+
+            # 转换策略类名为配置文件格式
+            import re
+            class_name = self.class_name
+            if class_name.endswith("Strategy"):
+                class_name = class_name[:-8]
+            s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', class_name)
+            strategy_name = re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+
+            print(f"策略配置名: {strategy_name}")
+
+            # 获取最优参数
+            optimized_params = param_manager.get_params(
+                strategy_name=strategy_name,
+                symbol=self.vt_symbol
+            )
+
+            print(f"获取到的最优参数: {optimized_params}")
+
+            if optimized_params:
+                # 填充最优参数（覆盖默认参数）
+                # 注意：get_params() 现在只返回交易参数，不包含性能指标
+                # 直接覆盖所有默认参数
+                count = 0
+                for key, value in optimized_params.items():
+                    self.parameters[key] = value
+                    count += 1
+
+                print(f"✓ 已加载 {self.vt_symbol} 的最优参数: {count} 个参数")
+                print(f"更新后的参数: {self.parameters}")
+            else:
+                print(f"❌ 未找到 {self.vt_symbol} 的最优参数")
+
+        except Exception as e:
+            print(f"❌ 加载最优参数失败: {e}")
+            import traceback
+            traceback.print_exc()
 
     def get_setting(self) -> dict:
         """"""
@@ -2203,6 +2264,30 @@ class CandleChartDialog(QtWidgets.QDialog):
 
         # 清除保存的交易数据
         self.trade_data.clear()
+
+    def closeEvent(self, event) -> None:
+        """对话框关闭时清理资源，防止bus error"""
+        # 清除交易连线
+        candle_plot: pg.PlotItem = self.chart.get_plot("candle")
+        for item in self.items:
+            candle_plot.removeItem(item)
+        self.items.clear()
+
+        # 清除图表数据（包括所有indicators）
+        self.chart.clear_all()
+
+        # 清除映射
+        self.dt_ix_map.clear()
+        self.ix_bar_map.clear()
+        self.trade_data.clear()
+
+        # 标记为未更新，这样下次打开时会重新加载数据
+        self.updated = False
+
+        # 注意：双图/四图会被Qt自动清理，不需要手动deleteLater()
+        # 它们是dialog的子widget，父对象销毁时会自动清理子对象
+
+        super().closeEvent(event)
 
     def is_updated(self) -> bool:
         """"""

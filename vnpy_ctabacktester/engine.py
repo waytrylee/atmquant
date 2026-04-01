@@ -96,7 +96,7 @@ class BacktesterEngine(BaseEngine):
         path2: Path = Path.cwd().joinpath("strategies")
         self.load_strategy_class_from_folder(path2, "strategies")
         
-        # 加载ATMQuant自定义策略
+        # 加载ATMTrader自定义策略
         path3: Path = Path(__file__).parent.parent.joinpath("core", "strategies")
         self.load_strategy_class_from_folder(path3, "core.strategies")
 

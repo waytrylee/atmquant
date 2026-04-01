@@ -473,7 +473,7 @@ class BacktestingEngine:
         advanced_metrics = {}
 
         if hasattr(self, 'trade_pairs') and self.trade_pairs:
-            trade_statistics = calculate_trade_statistics(self.trade_pairs, self.size)
+            trade_statistics = calculate_trade_statistics(self.trade_pairs, self.size, self.vt_symbol)
             monthly_statistics = calculate_monthly_statistics(self.trade_pairs, self.size)
             interval_statistics = calculate_interval_statistics(self.trade_pairs, self.size)
 
@@ -491,6 +491,9 @@ class BacktestingEngine:
             self.output(_("最大连续盈利次数: \t{}").format(trade_statistics.get("max_consecutive_wins", 0)))
             self.output(_("最大连续亏损次数: \t{}").format(trade_statistics.get("max_consecutive_losses", 0)))
             self.output(_("最优仓位比例: \t{:.2%}").format(trade_statistics.get("optimal_position_ratio", 0)))
+            # 输出每日交易时长（用于持仓天数换算）
+            daily_hours = trade_statistics.get("daily_trading_hours", 24.0)
+            self.output(_("每日交易时长: \t{:.1f}小时").format(daily_hours))
             self.output(_("平均持仓时间: \t{:.2f}天").format(trade_statistics.get("average_holding_time_days", 0)))
             self.output(_("最大持仓时间: \t{:.2f}天").format(trade_statistics.get("max_holding_time_days", 0)))
             self.output(_("最小持仓时间: \t{:.2f}天").format(trade_statistics.get("min_holding_time_days", 0)))
@@ -544,9 +547,9 @@ class BacktestingEngine:
             **trade_statistics,
             # Advanced risk metrics
             **advanced_metrics,
-            # Additional data for UI display
-            "monthly_statistics": self._convert_monthly_stats_to_dict(monthly_statistics),
-            "interval_statistics": self._convert_interval_stats_to_dict(interval_statistics),
+            # Additional data for UI display - 直接返回DataFrame以便使用to_string格式化
+            "monthly_statistics": monthly_statistics,
+            "interval_statistics": interval_statistics,
         }
 
         # Calculate comprehensive rating
@@ -554,6 +557,13 @@ class BacktestingEngine:
 
         # Filter potential error infinite value
         for key, value in statistics.items():
+            # 跳过DataFrame类型（monthly_statistics和interval_statistics）
+            if hasattr(value, 'to_dict'):
+                continue
+            # 跳过其他容器类型
+            if hasattr(value, '__iter__') and not isinstance(value, str):
+                continue
+            # 处理标量值
             if value in (np.inf, -np.inf):
                 value = 0
             # 对于连续盈亏次数，保持整数类型

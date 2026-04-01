@@ -35,6 +35,9 @@ from ..engine import (
     OptimizationSetting
 )
 
+# 导入增强的统计监控器
+from .enhanced_widget import EnhancedStatisticsMonitor
+
 # 避免循环导入，在需要时动态导入对话框类
 
 
@@ -474,6 +477,14 @@ class RedesignedBacktesterManager(QtWidgets.QWidget):
         self.daily_tab = self.create_daily_tab()
         self.tab_widget.addTab(self.daily_tab, "每日盈亏")
 
+        # 月度统计选项卡
+        self.monthly_chart_tab = self.create_monthly_chart_tab()
+        self.tab_widget.addTab(self.monthly_chart_tab, "月度统计")
+
+        # 半小时区间统计选项卡
+        self.interval_chart_tab = self.create_interval_chart_tab()
+        self.tab_widget.addTab(self.interval_chart_tab, "区间统计")
+
         layout.addWidget(self.tab_widget)
         widget.setLayout(layout)
         return widget
@@ -497,8 +508,8 @@ class RedesignedBacktesterManager(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout()
         layout.setContentsMargins(10, 10, 10, 10)
 
-        # 创建网格布局显示指标
-        self.metrics_widget = MetricsGridWidget()
+        # 使用增强的统计监控器（双列布局）
+        self.metrics_widget = EnhancedStatisticsMonitor()
         layout.addWidget(self.metrics_widget)
 
         widget.setLayout(layout)
@@ -555,6 +566,38 @@ class RedesignedBacktesterManager(QtWidgets.QWidget):
         self.daily_table.horizontalHeader().setStretchLastSection(True)
 
         layout.addWidget(self.daily_table)
+        widget.setLayout(layout)
+        return widget
+
+    def create_monthly_chart_tab(self) -> QtWidgets.QWidget:
+        """创建月度统计图表选项卡"""
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout()
+        layout.setContentsMargins(5, 5, 5, 5)
+
+        # 创建容器widget用于放置图表
+        self.monthly_chart_container = QtWidgets.QWidget()
+        monthly_chart_layout = QtWidgets.QVBoxLayout()
+        monthly_chart_layout.setContentsMargins(0, 0, 0, 0)
+        self.monthly_chart_container.setLayout(monthly_chart_layout)
+        layout.addWidget(self.monthly_chart_container)
+
+        widget.setLayout(layout)
+        return widget
+
+    def create_interval_chart_tab(self) -> QtWidgets.QWidget:
+        """创建半小时区间统计图表选项卡"""
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout()
+        layout.setContentsMargins(5, 5, 5, 5)
+
+        # 创建容器widget用于放置图表
+        self.interval_chart_container = QtWidgets.QWidget()
+        interval_chart_layout = QtWidgets.QVBoxLayout()
+        interval_chart_layout.setContentsMargins(0, 0, 0, 0)
+        self.interval_chart_container.setLayout(interval_chart_layout)
+        layout.addWidget(self.interval_chart_container)
+
         widget.setLayout(layout)
         return widget
 
@@ -651,17 +694,83 @@ class RedesignedBacktesterManager(QtWidgets.QWidget):
     def process_backtesting_finished_event(self, event: Event) -> None:
         """处理回测完成事件"""
         statistics: dict = self.backtester_engine.get_result_statistics()
-        
+
         # 更新核心指标和完整指标
         self.core_metrics_widget.update_core_metrics(statistics)
-        self.metrics_widget.update_metrics(statistics)
-        
+        self.metrics_widget.set_data(statistics)
+
+        # 更新月度统计和区间统计图表 - 使用MetricsGridWidget的create方法
+        # 清除旧的图表
+        for i in reversed(range(self.monthly_chart_container.layout().count())):
+            self.monthly_chart_container.layout().itemAt(i).widget().deleteLater()
+        for i in reversed(range(self.interval_chart_container.layout().count())):
+            self.interval_chart_container.layout().itemAt(i).widget().deleteLater()
+
+        # 创建临时MetricsGridWidget来生成图表
+        temp_metrics_widget = MetricsGridWidget()
+        temp_metrics_widget.df_statistics = self.backtester_engine.get_result_df()
+
+        # 生成月度统计图表
+        if "monthly_statistics" in statistics and statistics["monthly_statistics"] is not None:
+            monthly_stats = statistics["monthly_statistics"]
+            # 转换DataFrame为图表期望的格式
+            if hasattr(monthly_stats, 'to_dict') and not monthly_stats.empty:
+                monthly_stats_dict = {}
+                for _, row in monthly_stats.iterrows():
+                    month_key = str(row.get('month', ''))
+                    # 解析win_rate字符串（去除%并转换为小数）
+                    win_rate_str = row.get('win_rate', '0%')
+                    if isinstance(win_rate_str, str) and '%' in win_rate_str:
+                        win_rate = float(win_rate_str.replace('%', '')) / 100
+                    else:
+                        win_rate = float(win_rate_str) if win_rate_str else 0
+
+                    monthly_stats_dict[month_key] = {
+                        'return': row.get('total_pnl', 0),  # total_pnl作为return
+                        'win_rate': win_rate,
+                    }
+            else:
+                monthly_stats_dict = monthly_stats if isinstance(monthly_stats, dict) else {}
+
+            monthly_chart = temp_metrics_widget.create_monthly_chart(monthly_stats_dict)
+            if monthly_chart and "月度统计图表" in monthly_chart:
+                canvas = monthly_chart["月度统计图表"]
+                self.monthly_chart_container.layout().addWidget(canvas)
+
+        # 生成区间统计图表
+        if "interval_statistics" in statistics and statistics["interval_statistics"] is not None:
+            interval_stats = statistics["interval_statistics"]
+            # 转换DataFrame为图表期望的格式
+            if hasattr(interval_stats, 'to_dict') and not interval_stats.empty:
+                interval_stats_dict = {}
+                for _, row in interval_stats.iterrows():
+                    interval_key = str(row.get('interval_start', ''))
+                    # 解析win_rate字符串（去除%并转换为小数）
+                    win_rate_str = row.get('win_rate', '0%')
+                    if isinstance(win_rate_str, str) and '%' in win_rate_str:
+                        win_rate = float(win_rate_str.replace('%', '')) / 100
+                    else:
+                        win_rate = float(win_rate_str) if win_rate_str else 0
+
+                    interval_stats_dict[interval_key] = {
+                        'return': row.get('total_pnl', 0),  # total_pnl作为return
+                        'win_rate': win_rate,
+                        'trades': int(row.get('total_trades', 0)),
+                    }
+            else:
+                interval_stats_dict = interval_stats if isinstance(interval_stats, dict) else {}
+
+            interval_chart = temp_metrics_widget.create_interval_chart(interval_stats_dict)
+            if interval_chart and "半小时区间统计图表" in interval_chart:
+                canvas = interval_chart["半小时区间统计图表"]
+                self.interval_chart_container.layout().addWidget(canvas)
+
         # 更新表格数据
         self.update_tables()
-        
+
         # 更新图表
         self.update_charts()
-        
+
         # 启用相关按钮
         self.candle_button.setEnabled(True)
         # 注意：result_button只在优化完成后才启用，回测完成不启用
@@ -905,7 +1014,7 @@ class RedesignedBacktesterManager(QtWidgets.QWidget):
         # Get strategy setting
         from .widget import BacktestingSettingEditor
         old_setting: dict = self.settings[class_name]
-        dialog: BacktestingSettingEditor = BacktestingSettingEditor(class_name, old_setting)
+        dialog: BacktestingSettingEditor = BacktestingSettingEditor(class_name, old_setting, vt_symbol)
         i: int = dialog.exec()
         if i != dialog.DialogCode.Accepted:
             return
@@ -930,8 +1039,13 @@ class RedesignedBacktesterManager(QtWidgets.QWidget):
         if result:
             # 清除之前的数据
             self.core_metrics_widget.update_core_metrics({})
-            self.metrics_widget.update_metrics({})
-            
+            self.metrics_widget.clear_data()
+            # 清除图表容器中的内容
+            for i in reversed(range(self.monthly_chart_container.layout().count())):
+                self.monthly_chart_container.layout().itemAt(i).widget().deleteLater()
+            for i in reversed(range(self.interval_chart_container.layout().count())):
+                self.interval_chart_container.layout().itemAt(i).widget().deleteLater()
+
             # 禁用按钮
             self.candle_button.setEnabled(False)
             # result_button在回测时不需要禁用，因为它只与优化相关
@@ -1134,233 +1248,860 @@ class CoreMetricsWidget(QtWidgets.QWidget):
         """初始化界面"""
         layout = QtWidgets.QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        
-        # 创建核心指标网格
+
+        # 创建核心指标网格 - 优化后的紧凑布局
         self.grid_layout = QtWidgets.QGridLayout()
-        self.grid_layout.setSpacing(15)  # 减小间距以适应更多卡片
-        
+        self.grid_layout.setSpacing(10)  # 卡片之间的间距
+        self.grid_layout.setContentsMargins(0, 0, 0, 0)  # 整体布局边距
+
         # 创建占位符卡片
         self.create_placeholder_cards()
-        
+
         container = QtWidgets.QWidget()
         container.setLayout(self.grid_layout)
-        
+
         layout.addWidget(container)
         layout.addStretch()
         self.setLayout(layout)
         
     def create_placeholder_cards(self):
-        """创建占位符卡片"""
-        # 核心指标列表 - 16个最重要的指标，重新排序
-        core_metrics = [
-            ("开始时间", "N/A", False),
-            ("结束时间", "N/A", False),
-            ("总收益率", "0.00%", True),
-            ("年化收益", "0.00%", False),
-            ("总盈亏", "0.00", False),
-            ("最大回撤", "0.00%", True),
-            ("收益回撤比", "0.00", False),
-            ("盈亏比", "0.00", False),
-            ("总交易次数", "0", False),
-            ("胜率", "0.00%", False),
-            ("最优仓位比例", "0.00%", False),
-            ("平均持仓天数", "0.00", False),
-            ("夏普比率", "0.00", True),
-            ("索提诺比率", "0.00", False),
-            ("卡尔马比率", "0.00", False),
-            ("综合评分", "0.0", True),
-        ]
-        
-        # 4列布局
-        cols = 4
-        for i, (name, value, highlight) in enumerate(core_metrics):
-            row = i // cols
-            col = i % cols
-            card = self.create_core_metric_card(name, value, highlight)
-            self.grid_layout.addWidget(card, row, col)
+        """创建24个核心指标卡片 - 6x4统一网格布局（完整指标分组）"""
+        # 第一行 - 收益指标
+        self.create_minor_card(0, 0, "总收益率", "0.00%", False, "收益")
+        self.create_minor_card(0, 1, "年化收益", "0.00%", False, "收益")
+        self.create_minor_card(0, 2, "总盈亏", "0.00", False, "收益")
+        self.create_minor_card(0, 3, "日均盈亏", "0.00", False, "收益")
+
+        # 第二行 - 风险指标
+        self.create_minor_card(1, 0, "最大回撤", "0.00", False, "风险")
+        self.create_minor_card(1, 1, "百分比最大回撤", "0.00%", False, "风险")
+        self.create_minor_card(1, 2, "最大回撤天数", "0", False, "风险")
+        self.create_minor_card(1, 3, "综合评分", "0.0000", False, "风险")
+
+        # 第三行 - 风险调整收益
+        self.create_minor_card(2, 0, "夏普比率", "0.00", False, "风险调整")
+        self.create_minor_card(2, 1, "索提诺比率", "0.00", False, "风险调整")
+        self.create_minor_card(2, 2, "卡尔马比率", "0.00", False, "风险调整")
+        self.create_minor_card(2, 3, "收益回撤比", "0.00", False, "风险调整")
+
+        # 第四行 - 风险调整收益（续）+ 交易统计
+        self.create_minor_card(3, 0, "EWM夏普", "0.00", False, "风险调整")
+        self.create_minor_card(3, 1, "胜率", "0.00%", False, "交易")
+        self.create_minor_card(3, 2, "盈亏比", "0.00", False, "交易")
+        self.create_minor_card(3, 3, "获利因子", "0.00", False, "交易")
+
+        # 第五行 - 交易统计
+        self.create_minor_card(4, 0, "总成交笔数", "0", False, "交易")
+        self.create_minor_card(4, 1, "多头笔数", "0", False, "交易")
+        self.create_minor_card(4, 2, "空头笔数", "0", False, "交易")
+        self.create_minor_card(4, 3, "平均每笔盈亏", "0.00", False, "交易")
+
+        # 第六行 - 高级交易统计
+        self.create_minor_card(5, 0, "最大连续盈利次数", "0", False, "交易")
+        self.create_minor_card(5, 1, "最大连续亏损次数", "0", False, "交易")
+        self.create_minor_card(5, 2, "最优仓位比例", "0.00%", False, "交易")
+        self.create_minor_card(5, 3, "平均持仓时间", "0.00天", False, "交易")
+
+    def create_major_card(self, row: int, col: int, name: str, value: str, highlight: bool, colspan: int, rowspan: int):
+        """创建大卡片 - 用于核心指标"""
+        card = QtWidgets.QWidget()
+        card.setFixedHeight(120)  # 大卡片高度
+
+        # 设置样式 - 渐变背景 + 阴影效果
+        base_style = """
+            QWidget {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #3a3a3a, stop:1 #2a2a2a);
+                border: 2px solid #666;
+                border-radius: 12px;
+                padding: 20px;
+            }
+            QWidget:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #4a4a4a, stop:1 #3a3a3a);
+                border-color: #007acc;
+            }
+        """
+
+        if highlight:
+            base_style = """
+                QWidget {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                        stop:0 rgba(0, 122, 204, 0.3), stop:1 #2a2a2a);
+                    border: 2px solid #007acc;
+                    border-radius: 12px;
+                    padding: 20px;
+                }
+                QWidget:hover {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                        stop:0 rgba(0, 122, 204, 0.4), stop:1 #333);
+                    border-color: #0099ff;
+                }
+            """
+
+        card.setStyleSheet(base_style)
+
+        layout = QtWidgets.QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        # 指标名称 - 更大字体
+        name_label = QtWidgets.QLabel(name)
+        name_label.setStyleSheet("""
+            QLabel {
+                font-size: 14px;
+                color: #bbb;
+                font-weight: 600;
+                background: transparent;
+                border: none;
+                padding: 2px;
+                letter-spacing: 1px;
+            }
+        """)
+        name_label.setAlignment(QtCore.Qt.AlignLeft)
+        name_label.setWordWrap(True)
+
+        # 指标值 - 更大字体 + 发光效果
+        value_label = QtWidgets.QLabel(value)
+        base_value_style = """
+            QLabel {
+                font-size: 32px;
+                font-weight: 900;
+                background: transparent;
+                border: none;
+                line-height: 1;
+                padding: 4px;
+            }
+        """
+
+        # 使用智能分级着色系统
+        color = self.get_metric_color(name, value)
+        value_label.setStyleSheet(base_value_style + f"color: {color};")
+
+        value_label.setAlignment(QtCore.Qt.AlignLeft)
+        value_label.setWordWrap(True)
+
+        layout.addWidget(name_label)
+        layout.addStretch()
+        layout.addWidget(value_label)
+        card.setLayout(layout)
+
+        # 存储标签引用和卡片类型
+        setattr(card, 'name_label', name_label)
+        setattr(card, 'value_label', value_label)
+        setattr(card, 'metric_name', name)
+        setattr(card, 'card_type', 'major')  # 标记为大卡片
+
+        self.grid_layout.addWidget(card, row, col, rowspan, colspan)
+
+    def create_minor_card(self, row: int, col: int, name: str, value: str, highlight: bool, category: str = ""):
+        """创建小卡片 - 用于次要指标"""
+        card = QtWidgets.QWidget()
+        card.setFixedHeight(60) 
+
+        # 设置样式
+        base_style = """
+            QWidget {
+                background-color: #2a2a2a;
+                border: 1px solid #444;
+                border-radius: 8px;
+                padding: 10px;
+            }
+            QWidget:hover {
+                background-color: #333;
+                border-color: #555;
+            }
+        """
+
+        card.setStyleSheet(base_style)
+
+        layout = QtWidgets.QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+
+        # 顶部水平布局：左边是指标名称，右边是类型标签
+        header_layout = QtWidgets.QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(6)
+
+        # 指标名称
+        name_label = QtWidgets.QLabel(name)
+        name_label.setStyleSheet("""
+            QLabel {
+                font-size: 13px;
+                color: #999;
+                font-weight: 600;
+                background: transparent;
+                border: none;
+                padding: 1px;
+            }
+        """)
+        name_label.setAlignment(QtCore.Qt.AlignLeft)
+        name_label.setWordWrap(True)
+
+        # 类型标签（右上角小标签）
+        if category:
+            category_label = QtWidgets.QLabel(category)
+            category_label.setStyleSheet("""
+                QLabel {
+                    font-size: 10px;
+                    color: #666;
+                    background: rgba(255, 255, 255, 0.05);
+                    padding: 2px 6px;
+                    border-radius: 8px;
+                    font-weight: 600;
+                    border: none;
+                }
+            """)
+            category_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignTop)
+
+        header_layout.addWidget(name_label)
+        if category:
+            header_layout.addStretch()
+            header_layout.addWidget(category_label)
+
+        # 指标值
+        value_label = QtWidgets.QLabel(value)
+        base_style = """
+            QLabel {
+                font-size: 18px;
+                font-weight: bold;
+                background: transparent;
+                border: none;
+                line-height: 1;
+                padding: 1px;
+            }
+        """
+
+        # 使用智能分级着色系统
+        color = self.get_metric_color(name, value)
+        value_label.setStyleSheet(base_style + f"color: {color};")
+
+        value_label.setAlignment(QtCore.Qt.AlignLeft)
+        value_label.setWordWrap(True)
+
+        # 等级说明标签（右下角）
+        grade_text = self.get_metric_grade_text(name, value, color)
+        grade_label = QtWidgets.QLabel(grade_text)
+        grade_label.setStyleSheet("""
+            QLabel {
+                font-size: 10px;
+                color: #888;
+                font-weight: 500;
+                background: transparent;
+                border: none;
+                padding: 1px;
+            }
+        """)
+        grade_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignBottom)
+
+        # 底部水平布局：左边是数值，右边是等级说明
+        bottom_layout = QtWidgets.QHBoxLayout()
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(8)
+        bottom_layout.addWidget(value_label)
+        bottom_layout.addStretch()
+        bottom_layout.addWidget(grade_label)
+
+        layout.addLayout(header_layout)
+        layout.addStretch()
+        layout.addLayout(bottom_layout)
+        card.setLayout(layout)
+
+        # 存储标签引用和卡片类型
+        setattr(card, 'name_label', name_label)
+        setattr(card, 'value_label', value_label)
+        setattr(card, 'grade_label', grade_label)
+        setattr(card, 'metric_name', name)
+        setattr(card, 'card_type', 'minor')  # 标记为小卡片
+
+        self.grid_layout.addWidget(card, row, col)
     
     def create_core_metric_card(self, name: str, value: str, highlight: bool = False) -> QtWidgets.QWidget:
-        """创建核心指标卡片"""
+        """创建核心指标卡片 - 优化后的紧凑设计"""
         card = QtWidgets.QWidget()
-        card.setFixedHeight(80)  # 减小高度以适应4行布局
-        
-        # 设置样式
+        card.setFixedHeight(60)  # 从80px减小到60px
+
+        # 设置样式 - 减小内边距
         base_style = """
             QWidget {
                 background-color: #333;
                 border: 2px solid #555;
                 border-radius: 8px;
-                padding: 20px;
+                padding: 12px;
             }
             QWidget:hover {
                 background-color: #3a3a3a;
                 border-color: #666;
             }
         """
-        
+
         if highlight:
             base_style = """
                 QWidget {
                     background: linear-gradient(135deg, #333 0%, #3a3a3a 100%);
                     border: 2px solid #007acc;
                     border-radius: 8px;
-                    padding: 20px;
+                    padding: 12px;
                 }
                 QWidget:hover {
                     border-color: #0099ff;
                 }
             """
-        
+
         card.setStyleSheet(base_style)
-        
+
         layout = QtWidgets.QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-        
-        # 指标名称
+        layout.setSpacing(4)  # 从8px减小到4px
+
+        # 指标名称 - 减小字体
         name_label = QtWidgets.QLabel(name)
         name_label.setStyleSheet("""
             QLabel {
-                font-size: 13px;
+                font-size: 11px;
                 color: #ddd;
                 font-weight: 600;
                 background: transparent;
                 border: none;
-                padding: 2px;
+                padding: 1px;
             }
         """)
         name_label.setAlignment(QtCore.Qt.AlignCenter)
         name_label.setWordWrap(True)
-        
-        # 指标值
+
+        # 指标值 - 减小字体并使用智能分级着色
         value_label = QtWidgets.QLabel(value)
         base_style = """
             QLabel {
-                font-size: 22px;
+                font-size: 18px;
                 font-weight: bold;
                 background: transparent;
                 border: none;
                 line-height: 1.1;
-                padding: 2px;
+                padding: 1px;
             }
         """
-        
-        # 根据指标类型设置颜色（中国市场：红涨绿跌）
-        if name in ["总收益率", "年化收益", "总盈亏", "夏普比率", "收益回撤比", "胜率", "盈亏比", "卡尔马比率", "索提诺比率", "综合评分"]:
-            try:
-                # 尝试提取数值判断正负
-                numeric_str = value.replace('%', '').replace(',', '').replace('N/A', '0')
-                if numeric_str:
-                    numeric_value = float(numeric_str)
-                    if numeric_value > 0:
-                        value_label.setStyleSheet(base_style + "color: #ff4444;")  # 红色表示盈利
-                    elif numeric_value < 0:
-                        value_label.setStyleSheet(base_style + "color: #00aa00;")  # 绿色表示亏损
-                    else:
-                        value_label.setStyleSheet(base_style + "color: #fff;")
-                else:
-                    value_label.setStyleSheet(base_style + "color: #fff;")
-            except:
-                value_label.setStyleSheet(base_style + "color: #fff;")
-        elif name in ["最大回撤"]:
-            # 回撤总是负面的，用绿色
-            value_label.setStyleSheet(base_style + "color: #00aa00;")
-        else:
-            # 中性指标用白色
-            value_label.setStyleSheet(base_style + "color: #fff;")
-            
+
+        # 使用智能分级着色系统
+        color = self.get_metric_color(name, value)
+        value_label.setStyleSheet(base_style + f"color: {color};")
+
         value_label.setAlignment(QtCore.Qt.AlignCenter)
         value_label.setWordWrap(True)
-        
+
         layout.addWidget(name_label)
         layout.addWidget(value_label)
         card.setLayout(layout)
-        
+
         # 存储标签引用以便后续更新
         setattr(card, 'name_label', name_label)
         setattr(card, 'value_label', value_label)
         setattr(card, 'metric_name', name)
-        
+
         return card
+
+    def get_metric_grade_text(self, metric_name: str, value_str: str, color: str) -> str:
+        """
+        根据指标名称、值和颜色，返回等级说明文本
+        例如: "深红 - 优秀 (>20%)" 或 "深绿 - 优秀 (<5%)"
+        """
+        try:
+            # 尝试解析数值
+            value_str_clean = value_str.replace('%', '').replace(',', '').replace('天', '')
+            value = float(value_str_clean)
+        except (ValueError, AttributeError):
+            return ""
+
+        # 根据颜色确定等级名称
+        color_grade_map = {
+            "#ff2222": "深红 - 优秀",
+            "#ff4444": "浅红 - 良好",
+            "#ffffff": "白色 - 中性",
+            "#00aa00": "浅绿 - 一般",
+            "#008800": "深绿 - 较差"
+        }
+
+        grade_text = color_grade_map.get(color, "")
+        if not grade_text:
+            return ""
+
+        # 根据指标名称和数值，确定标准值说明
+        standard_text = ""
+
+        # 收益类指标（越高越好，红色为优）
+        if metric_name == "总收益率":
+            if color == "#ff2222":
+                standard_text = "(>20%)"
+            elif color == "#ff4444":
+                standard_text = "(>10%)"
+            elif color == "#ffffff":
+                standard_text = "(±10%)"
+            elif color == "#00aa00":
+                standard_text = "(<-10%)"
+            else:
+                standard_text = "(<-20%)"
+
+        elif metric_name == "年化收益":
+            if color == "#ff2222":
+                standard_text = "(>15%)"
+            elif color == "#ff4444":
+                standard_text = "(>5%)"
+            elif color == "#ffffff":
+                standard_text = "(±5%)"
+            elif color == "#00aa00":
+                standard_text = "(<-5%)"
+            else:
+                standard_text = "(<-15%)"
+
+        elif metric_name in ["总盈亏", "日均盈亏", "平均每笔盈亏"]:
+            if color == "#ff2222":
+                standard_text = "(>1000)"
+            elif color == "#ff4444":
+                standard_text = "(>100)"
+            elif color == "#ffffff":
+                standard_text = "(±100)"
+            elif color == "#00aa00":
+                standard_text = "(<-100)"
+            else:
+                standard_text = "(<-1000)"
+
+        # 风险类指标（越小越好，绿色为优）
+        elif metric_name in ["最大回撤", "百分比最大回撤"]:
+            if color == "#008800":
+                standard_text = "(<5%)"
+            elif color == "#00aa00":
+                standard_text = "(<10%)"
+            elif color == "#ffffff":
+                standard_text = "(10-15%)"
+            elif color == "#ff4444":
+                standard_text = "(>15%)"
+            else:
+                standard_text = "(>25%)"
+
+        elif metric_name == "最大回撤天数":
+            # 注意：回撤天数的颜色逻辑是绿色为优
+            if color == "#008800":
+                standard_text = "(<10天)"
+            elif color == "#00aa00":
+                standard_text = "(<20天)"
+            elif color == "#ffffff":
+                standard_text = "(20-30天)"
+            elif color == "#ff4444":
+                standard_text = "(>30天)"
+            else:
+                standard_text = "(>60天)"
+
+        # 风险调整收益类（越高越好，红色为优）
+        elif metric_name in ["夏普比率", "卡尔马比率", "收益回撤比", "EWM夏普"]:
+            if color == "#ff2222":
+                standard_text = "(>2.0)"
+            elif color == "#ff4444":
+                standard_text = "(>1.0)"
+            elif color == "#ffffff":
+                standard_text = "(>0.5)"
+            elif color == "#00aa00":
+                standard_text = "(>0)"
+            else:
+                standard_text = "(≤0)"
+
+        elif metric_name == "索提诺比率":
+            if color == "#ff2222":
+                standard_text = "(>3.0)"
+            elif color == "#ff4444":
+                standard_text = "(>1.5)"
+            elif color == "#ffffff":
+                standard_text = "(>0.75)"
+            elif color == "#00aa00":
+                standard_text = "(>0)"
+            else:
+                standard_text = "(≤0)"
+
+        elif metric_name == "综合评分":
+            if color == "#ff2222":
+                standard_text = "(>0.8)"
+            elif color == "#ff4444":
+                standard_text = "(>0.6)"
+            elif color == "#ffffff":
+                standard_text = "(>0.4)"
+            elif color == "#00aa00":
+                standard_text = "(>0.2)"
+            else:
+                standard_text = "(≤0.2)"
+
+        # 交易统计类
+        elif metric_name == "胜率":
+            if color == "#ff2222":
+                standard_text = "(>60%)"
+            elif color == "#ff4444":
+                standard_text = "(>50%)"
+            elif color == "#ffffff":
+                standard_text = "(40-50%)"
+            elif color == "#00aa00":
+                standard_text = "(30-40%)"
+            else:
+                standard_text = "(<30%)"
+
+        elif metric_name in ["盈亏比", "获利因子"]:
+            if color == "#ff2222":
+                standard_text = "(>2.5)"
+            elif color == "#ff4444":
+                standard_text = "(>1.5)"
+            elif color == "#ffffff":
+                standard_text = "(1.0-1.5)"
+            elif color == "#00aa00":
+                standard_text = "(0.5-1.0)"
+            else:
+                standard_text = "(<0.5)"
+
+        elif metric_name == "最大连续盈利次数":
+            if color == "#ff2222":
+                standard_text = "(>10次)"
+            elif color == "#ff4444":
+                standard_text = "(>5次)"
+            elif color == "#ffffff":
+                standard_text = "(3-5次)"
+            elif color == "#00aa00":
+                standard_text = "(2次)"
+            else:
+                standard_text = "(≤1次)"
+
+        elif metric_name == "最大连续亏损次数":
+            if color == "#008800":
+                standard_text = "(≤1次)"
+            elif color == "#00aa00":
+                standard_text = "(<3次)"
+            elif color == "#ffffff":
+                standard_text = "(3-5次)"
+            elif color == "#ff4444":
+                standard_text = "(>5次)"
+            else:
+                standard_text = "(>10次)"
+
+        # 中性指标不显示标准
+        elif metric_name in ["总成交笔数", "多头笔数", "空头笔数", "最优仓位比例", "平均持仓时间"]:
+            return ""
+
+        return f"{grade_text} {standard_text}"
+
+    def get_metric_color(self, metric_name: str, value_str: str) -> str:
+        """
+        智能分级着色系统 - 根据指标值返回对应颜色
+
+        颜色分级（中国市场：红涨绿跌）：
+        - 深红 #ff2222：优秀（>20%收益率，>2.0夏普，>60%胜率，>0.8评分）
+        - 浅红 #ff4444：良好（>5%收益率，>1.0夏普，>50%胜率，>0.6评分）
+        - 白色 #ffffff：中性（±5%收益率，0.5-1.0夏普，40-50%胜率，0.4-0.6评分）
+        - 浅绿 #00aa00：一般（<-5%收益率，≤0.5夏普，<40%胜率，≤0.4评分）
+        - 深绿 #008800：较差（<-20%收益率，<0夏普，<30%胜率，<0.2评分）
+
+        特殊处理：
+        - 最大回撤：反向逻辑（越小越好），用绿色表示
+        """
+        try:
+            # 提取数值
+            numeric_str = value_str.replace('%', '').replace(',', '').replace('N/A', '0')
+            if not numeric_str:
+                return "#ffffff"
+            value = float(numeric_str)
+
+            # 收益类指标（总收益率、年化收益）- 深红>20%, 浅红>5%, 白色±5%, 浅绿<-5%, 深绿<-20%
+            if metric_name in ["总收益率", "年化收益"]:
+                if value > 20:
+                    return "#ff2222"  # 深红 - 优秀
+                elif value > 5:
+                    return "#ff4444"  # 浅红 - 良好
+                elif value >= -5:
+                    return "#ffffff"  # 白色 - 中性
+                elif value >= -20:
+                    return "#00aa00"  # 浅绿 - 一般
+                else:
+                    return "#008800"  # 深绿 - 较差
+
+            # 最大回撤 - 特殊处理：越小越好，用绿色系（使用绝对值）
+            # 深绿<5%, 浅绿<10%, 白色10-15%, 浅红>15%, 深红>25%
+            elif metric_name == "最大回撤":
+                abs_value = abs(value)  # 使用绝对值
+                if abs_value < 5:
+                    return "#008800"  # 深绿 - 优秀（回撤小）
+                elif abs_value < 10:
+                    return "#00aa00"  # 浅绿 - 良好
+                elif abs_value <= 15:
+                    return "#ffffff"  # 白色 - 中性
+                elif abs_value <= 25:
+                    return "#ff4444"  # 浅红 - 一般
+                else:
+                    return "#ff2222"  # 深红 - 较差（回撤大）
+
+            # 夏普比率、卡尔马比率、收益回撤比 - 深红>2.0, 浅红>1.0, 白色>0.5, 浅绿≤0.5, 深绿≤0
+            elif metric_name in ["夏普比率", "卡尔马比率", "收益回撤比"]:
+                if value > 2.0:
+                    return "#ff2222"  # 深红 - 优秀
+                elif value > 1.0:
+                    return "#ff4444"  # 浅红 - 良好
+                elif value > 0.5:
+                    return "#ffffff"  # 白色 - 中性
+                elif value > 0:
+                    return "#00aa00"  # 浅绿 - 一般
+                else:
+                    return "#008800"  # 深绿 - 较差
+
+            # 胜率 - 深红>60%, 浅红>50%, 白色40-50%, 浅绿<40%, 深绿<30%
+            elif metric_name == "胜率":
+                if value > 60:
+                    return "#ff2222"  # 深红 - 优秀
+                elif value > 50:
+                    return "#ff4444"  # 浅红 - 良好
+                elif value >= 40:
+                    return "#ffffff"  # 白色 - 中性
+                elif value >= 30:
+                    return "#00aa00"  # 浅绿 - 一般
+                else:
+                    return "#008800"  # 深绿 - 较差
+
+            # 盈亏比 - 深红>2.5, 浅红>1.5, 白色1.0-1.5, 浅绿<1.0, 深绿<0.5
+            elif metric_name == "盈亏比":
+                if value > 2.5:
+                    return "#ff2222"  # 深红 - 优秀
+                elif value > 1.5:
+                    return "#ff4444"  # 浅红 - 良好
+                elif value >= 1.0:
+                    return "#ffffff"  # 白色 - 中性
+                elif value >= 0.5:
+                    return "#00aa00"  # 浅绿 - 一般
+                else:
+                    return "#008800"  # 深绿 - 较差
+
+            # 综合评分 - 深红>0.8, 浅红>0.6, 白色>0.4, 浅绿≤0.4, 深绿≤0.2
+            elif metric_name == "综合评分":
+                if value > 0.8:
+                    return "#ff2222"  # 深红 - 优秀
+                elif value > 0.6:
+                    return "#ff4444"  # 浅红 - 良好
+                elif value > 0.4:
+                    return "#ffffff"  # 白色 - 中性
+                elif value > 0.2:
+                    return "#00aa00"  # 浅绿 - 一般
+                else:
+                    return "#008800"  # 深绿 - 较差
+
+            # 月均收益/日均收益 - 深红>2%, 浅红>0.5%, 白色±0.5%, 浅绿<-0.5%, 深绿<-2%
+            elif metric_name in ["月均收益", "日均收益"]:
+                if value > 2:
+                    return "#ff2222"  # 深红 - 优秀
+                elif value > 0.5:
+                    return "#ff4444"  # 浅红 - 良好
+                elif value >= -0.5:
+                    return "#ffffff"  # 白色 - 中性
+                elif value >= -2:
+                    return "#00aa00"  # 浅绿 - 一般
+                else:
+                    return "#008800"  # 深绿 - 较差
+
+            # 回撤天数 - 深绿<10天, 浅绿<20天, 白色20-30天, 浅红>30天, 深红>60天
+            elif metric_name == "回撤天数":
+                if value < 10:
+                    return "#008800"  # 深绿 - 优秀（恢复快）
+                elif value < 20:
+                    return "#00aa00"  # 浅绿 - 良好
+                elif value <= 30:
+                    return "#ffffff"  # 白色 - 中性
+                elif value <= 60:
+                    return "#ff4444"  # 浅红 - 一般
+                else:
+                    return "#ff2222"  # 深红 - 较差（恢复慢）
+
+            # 收益波动/下行标准差 - 深绿<5%, 浅绿<10%, 白色10-15%, 浅红>15%, 深红>25%（使用绝对值）
+            elif metric_name in ["收益波动", "下行标准差"]:
+                abs_value = abs(value)  # 使用绝对值
+                if abs_value < 5:
+                    return "#008800"  # 深绿 - 优秀（波动小）
+                elif abs_value < 10:
+                    return "#00aa00"  # 浅绿 - 良好
+                elif abs_value <= 15:
+                    return "#ffffff"  # 白色 - 中性
+                elif abs_value <= 25:
+                    return "#ff4444"  # 浅红 - 一般
+                else:
+                    return "#ff2222"  # 深红 - 较差（波动大）
+
+            # 索提诺比率 - 深红>3.0, 浅红>1.5, 白色>0.75, 浅绿≤0.75, 深绿≤0
+            elif metric_name == "索提诺比率":
+                if value > 3.0:
+                    return "#ff2222"  # 深红 - 优秀
+                elif value > 1.5:
+                    return "#ff4444"  # 浅红 - 良好
+                elif value > 0.75:
+                    return "#ffffff"  # 白色 - 中性
+                elif value > 0:
+                    return "#00aa00"  # 浅绿 - 一般
+                else:
+                    return "#008800"  # 深绿 - 较差
+
+            # 获利因子 - 深红>2.5, 浅红>1.5, 白色1.0-1.5, 浅绿<1.0, 深绿<0.5
+            elif metric_name == "获利因子":
+                if value > 2.5:
+                    return "#ff2222"  # 深红 - 优秀
+                elif value > 1.5:
+                    return "#ff4444"  # 浅红 - 良好
+                elif value >= 1.0:
+                    return "#ffffff"  # 白色 - 中性
+                elif value >= 0.5:
+                    return "#00aa00"  # 浅绿 - 一般
+                else:
+                    return "#008800"  # 深绿 - 较差
+
+            # 总交易次数、多头笔数、空头笔数 - 中性指标，不做颜色分级
+            elif metric_name in ["总交易次数", "总成交笔数", "多头笔数", "空头笔数"]:
+                return "#ffffff"  # 白色 - 中性
+
+            # 总盈亏、日均盈亏、平均每笔盈亏 - 正盈利红色，负盈利绿色
+            elif metric_name in ["总盈亏", "日均盈亏", "平均每笔盈亏"]:
+                if value > 1000:
+                    return "#ff2222"  # 深红 - 优秀（大额盈利）
+                elif value > 100:
+                    return "#ff4444"  # 浅红 - 良好
+                elif value >= -100:
+                    return "#ffffff"  # 白色 - 中性
+                elif value >= -1000:
+                    return "#00aa00"  # 浅绿 - 一般（小额亏损）
+                else:
+                    return "#008800"  # 深绿 - 较差（大额亏损）
+
+            # 百分比最大回撤 - 与"最大回撤"相同逻辑，使用绝对值
+            elif metric_name == "百分比最大回撤":
+                abs_value = abs(value)
+                if abs_value < 5:
+                    return "#008800"  # 深绿 - 优秀（回撤小）
+                elif abs_value < 10:
+                    return "#00aa00"  # 浅绿 - 良好
+                elif abs_value <= 15:
+                    return "#ffffff"  # 白色 - 中性
+                elif abs_value <= 25:
+                    return "#ff4444"  # 浅红 - 一般
+                else:
+                    return "#ff2222"  # 深红 - 较差（回撤大）
+
+            # EWM夏普 - 与夏普比率相同逻辑
+            elif metric_name == "EWM夏普":
+                if value > 2.0:
+                    return "#ff2222"  # 深红 - 优秀
+                elif value > 1.0:
+                    return "#ff4444"  # 浅红 - 良好
+                elif value > 0.5:
+                    return "#ffffff"  # 白色 - 中性
+                elif value > 0:
+                    return "#00aa00"  # 浅绿 - 一般
+                else:
+                    return "#008800"  # 深绿 - 较差
+
+            # 最大连续盈利次数 - 深红>10次, 浅红>5次, 白色3-5次, 浅绿<3次, 深绿≤1次
+            elif metric_name == "最大连续盈利次数":
+                if value > 10:
+                    return "#ff2222"  # 深红 - 优秀
+                elif value > 5:
+                    return "#ff4444"  # 浅红 - 良好
+                elif value >= 3:
+                    return "#ffffff"  # 白色 - 中性
+                elif value >= 2:
+                    return "#00aa00"  # 浅绿 - 一般
+                else:
+                    return "#008800"  # 深绿 - 较差
+
+            # 最大连续亏损次数 - 深绿≤1次, 浅绿<3次, 白色3-5次, 浅红>5次, 深红>10次
+            elif metric_name == "最大连续亏损次数":
+                if value <= 1:
+                    return "#008800"  # 深绿 - 优秀（连续亏损少）
+                elif value < 3:
+                    return "#00aa00"  # 浅绿 - 良好
+                elif value <= 5:
+                    return "#ffffff"  # 白色 - 中性
+                elif value <= 10:
+                    return "#ff4444"  # 浅红 - 一般
+                else:
+                    return "#ff2222"  # 深红 - 较差（连续亏损多）
+
+            # 最优仓位比例、平均持仓时间 - 中性指标，不做颜色分级
+            elif metric_name in ["最优仓位比例", "平均持仓时间"]:
+                return "#ffffff"  # 白色 - 中性
+
+            # 默认白色
+            return "#ffffff"
+
+        except (ValueError, TypeError):
+            return "#ffffff"
         
     def update_core_metrics(self, statistics: dict):
-        """更新核心指标显示"""
+        """更新核心指标显示 - 使用智能分级着色系统"""
         if not statistics:
             return
-            
-        # 核心指标映射
-        start_date = statistics.get('start_date', 'N/A')
-        end_date = statistics.get('end_date', 'N/A')
-        
-        # 确保日期是字符串格式
-        if hasattr(start_date, 'strftime'):
-            start_date = start_date.strftime('%Y-%m-%d')
-        elif start_date is not None:
-            start_date = str(start_date)
-        else:
-            start_date = 'N/A'
-            
-        if hasattr(end_date, 'strftime'):
-            end_date = end_date.strftime('%Y-%m-%d')
-        elif end_date is not None:
-            end_date = str(end_date)
-        else:
-            end_date = 'N/A'
-        
+
         # 获取原始数据并正确处理百分比
+        # vnpy返回的total_return/annual_return/max_ddpercent/daily_return/return_std已经是百分比形式(如25.0表示25%)
+        # win_rate/optimal_position_ratio是小数形式(如0.5表示50%)
         total_return = statistics.get('total_return', 0)
         annual_return = statistics.get('annual_return', 0)
         max_ddpercent = statistics.get('max_ddpercent', 0)
-        
-        # 如果数据已经是百分比形式(0-1)，直接使用；如果是小数形式，需要转换
-        if abs(total_return) <= 1:
-            total_return_str = f"{total_return:.2%}"
-        else:
-            total_return_str = f"{total_return/100:.2%}"
-            
-        if abs(annual_return) <= 1:
-            annual_return_str = f"{annual_return:.2%}"
-        else:
-            annual_return_str = f"{annual_return/100:.2%}"
-            
-        if abs(max_ddpercent) <= 1:
-            max_ddpercent_str = f"{max_ddpercent:.2%}"
-        else:
-            max_ddpercent_str = f"{max_ddpercent/100:.2%}"
-        
-        # 格式化胜率
+
+        # 百分比形式的数据直接用{:.2f}%格式化
+        total_return_str = f"{total_return:.2f}%"
+        annual_return_str = f"{annual_return:.2f}%"
+        max_ddpercent_str = f"{max_ddpercent:.2f}%"
+
+        # 胜率是小数形式(0-1)，用{:.2%}格式化
         win_rate = statistics.get('win_rate', 0)
-        if abs(win_rate) <= 1:
-            win_rate_str = f"{win_rate:.2%}"
+        win_rate_str = f"{win_rate:.2%}"
+
+        # 格式化月均收益（从总收益和总天数计算，total_return已是百分比）
+        total_days = statistics.get('total_days', 0)
+        if total_days > 0:
+            monthly_return = (total_return / total_days) * 30
+            monthly_return_str = f"{monthly_return:.2f}%"
         else:
-            win_rate_str = f"{win_rate/100:.2%}"
-        
-        # 格式化最优仓位比例
-        optimal_pos = statistics.get('optimal_position_ratio', 0)
-        if abs(optimal_pos) <= 1:
-            optimal_pos_str = f"{optimal_pos:.2%}"
-        else:
-            optimal_pos_str = f"{optimal_pos/100:.2%}"
-        
+            monthly_return_str = "0.00%"
+
+        # 格式化日均收益（已是百分比形式）
+        daily_return = statistics.get('daily_return', 0)
+        daily_return_str = f"{daily_return:.2f}%"
+
+        # 格式化收益波动（已是百分比形式）
+        return_std = statistics.get('return_std', 0)
+        return_std_str = f"{return_std:.2f}%"
+
+        # 24个核心指标映射（与create_placeholder_cards中的顺序一致）
         metric_mapping = {
-            "开始时间": start_date,
-            "结束时间": end_date,
+            # 第一行 - 收益指标
             "总收益率": total_return_str,
             "年化收益": annual_return_str,
-            "最大回撤": max_ddpercent_str,
-            "夏普比率": f"{statistics.get('sharpe_ratio', 0):.2f}",
             "总盈亏": f"{statistics.get('total_net_pnl', 0):,.2f}",
+            "日均盈亏": f"{statistics.get('daily_net_pnl', 0):,.2f}",
+            # 第二行 - 风险指标
+            "最大回撤": f"{statistics.get('max_drawdown', 0):,.2f}",
+            "百分比最大回撤": max_ddpercent_str,
+            "最大回撤天数": f"{statistics.get('max_drawdown_duration', 0)}",
+            "综合评分": f"{statistics.get('overall_rating', 0):.4f}",
+            # 第三行 - 风险调整收益
+            "夏普比率": f"{statistics.get('sharpe_ratio', 0):.2f}",
+            "索提诺比率": f"{statistics.get('sortino_ratio', 0):.2f}",
+            "卡尔马比率": f"{statistics.get('calmar_ratio', 0):.2f}",
             "收益回撤比": f"{statistics.get('return_drawdown_ratio', 0):.2f}",
+            # 第四行 - 风险调整收益（续）+ 交易统计
+            "EWM夏普": f"{statistics.get('ewm_sharpe', 0):.2f}",
             "胜率": win_rate_str,
             "盈亏比": f"{statistics.get('average_win_loss_ratio', 0):.2f}",
-            "卡尔马比率": f"{statistics.get('calmar_ratio', 0):.2f}",
-            "总交易次数": f"{statistics.get('total_trade_count', 0)}",
-            "平均持仓天数": f"{statistics.get('average_holding_time_days', 0):.2f}",
-            "最优仓位比例": optimal_pos_str,
-            "索提诺比率": f"{statistics.get('sortino_ratio', 0):.2f}",
-            "综合评分": f"{statistics.get('overall_rating', 0):.2f}",
+            "获利因子": f"{statistics.get('profit_factor', 0):.2f}",
+            # 第五行 - 交易统计
+            "总成交笔数": f"{statistics.get('total_trade_count', 0)}",
+            "多头笔数": f"{statistics.get('long_trade_count', 0)}",
+            "空头笔数": f"{statistics.get('short_trade_count', 0)}",
+            "平均每笔盈亏": f"{statistics.get('average_trade', 0):,.2f}",
+            # 第六行 - 高级交易统计
+            "最大连续盈利次数": f"{statistics.get('max_consecutive_wins', 0)}",
+            "最大连续亏损次数": f"{statistics.get('max_consecutive_losses', 0)}",
+            "最优仓位比例": f"{statistics.get('optimal_position_ratio', 0):.2%}",
+            "平均持仓时间": f"{statistics.get('average_holding_time_days', 0):.2f}天",
         }
-        
+
         # 更新所有卡片
         for i in range(self.grid_layout.count()):
             item = self.grid_layout.itemAt(i)
@@ -1369,6 +2110,8 @@ class CoreMetricsWidget(QtWidgets.QWidget):
                 metric_name = getattr(card, 'metric_name', '')
                 if metric_name in metric_mapping:
                     value_label = getattr(card, 'value_label', None)
+                    grade_label = getattr(card, 'grade_label', None)
+
                     if value_label:
                         new_value = metric_mapping[metric_name]
                         # 确保值是字符串类型
@@ -1377,18 +2120,45 @@ class CoreMetricsWidget(QtWidgets.QWidget):
                         else:
                             new_value = str(new_value)
                         value_label.setText(new_value)
-                        
-                        # 设置颜色（中国市场：红涨绿跌）
-                        if metric_name in ["总收益率", "年化收益", "总盈亏", "夏普比率", "收益回撤比", "胜率", "盈亏比", "综合评分"]:
-                            try:
-                                # 尝试提取数值判断正负
-                                numeric_value = float(new_value.replace('%', '').replace(',', ''))
-                                if numeric_value > 0:
-                                    value_label.setStyleSheet(value_label.styleSheet() + "color: #ff4444;")  # 红色表示盈利
-                                elif numeric_value < 0:
-                                    value_label.setStyleSheet(value_label.styleSheet() + "color: #00aa00;")  # 绿色表示亏损
-                            except:
-                                pass
+
+                        # 使用智能分级着色系统更新颜色
+                        color = self.get_metric_color(metric_name, new_value)
+
+                        # 根据卡片类型使用正确的字体大小和颜色
+                        card_type = getattr(card, 'card_type', 'minor')
+                        if card_type == 'major':
+                            # 大卡片样式（包含颜色）
+                            style = f"""
+                                QLabel {{
+                                    font-size: 32px;
+                                    font-weight: 900;
+                                    background: transparent;
+                                    border: none;
+                                    line-height: 1;
+                                    padding: 4px;
+                                    color: {color};
+                                }}
+                            """
+                        else:
+                            # 小卡片样式（包含颜色）
+                            style = f"""
+                                QLabel {{
+                                    font-size: 16px;
+                                    font-weight: bold;
+                                    background: transparent;
+                                    border: none;
+                                    line-height: 1;
+                                    padding: 1px;
+                                    color: {color};
+                                }}
+                            """
+
+                        value_label.setStyleSheet(style)
+
+                        # 更新等级说明标签
+                        if grade_label:
+                            grade_text = self.get_metric_grade_text(metric_name, new_value, color)
+                            grade_label.setText(grade_text)
 
 
 class MetricsGridWidget(QtWidgets.QWidget):
@@ -1671,15 +2441,19 @@ class MetricsGridWidget(QtWidgets.QWidget):
         if not statistics:
             return
             
-        # 百分比格式化函数
-        def format_percentage(value):
-            """正确格式化百分比数据"""
+        # 百分比格式化函数 - vnpy返回的百分比指标(如total_return)已是百分比形式(如25.0表示25%)
+        def format_pct_value(value):
+            """格式化已经是百分比形式的值(如25.0 -> 25.00%)"""
             if value is None:
                 return "0.00%"
-            if abs(value) <= 1:
-                return f"{value:.2%}"
-            else:
-                return f"{value/100:.2%}"
+            return f"{value:.2f}%"
+
+        # 小数格式化函数 - vnpy返回的小数指标(如win_rate)是小数形式(如0.5表示50%)
+        def format_decimal_pct(value):
+            """格式化小数形式的百分比值(如0.5 -> 50.00%)"""
+            if value is None:
+                return "0.00%"
+            return f"{value:.2%}"
         
         # 日期格式化函数
         def format_date(date_value):
@@ -1704,23 +2478,23 @@ class MetricsGridWidget(QtWidgets.QWidget):
             "结束资金": f"{statistics.get('end_balance', 0):,.2f}",
         }
         
-        # 【收益指标】
+        # 【收益指标】 - total_return/annual_return/daily_return已是百分比形式
         return_metrics = {
-            "总收益率": format_percentage(statistics.get('total_return', 0)),
-            "年化收益": format_percentage(statistics.get('annual_return', 0)),
-            "日均收益率": format_percentage(statistics.get('daily_return', 0)),
+            "总收益率": format_pct_value(statistics.get('total_return', 0)),
+            "年化收益": format_pct_value(statistics.get('annual_return', 0)),
+            "日均收益率": format_pct_value(statistics.get('daily_return', 0)),
             "总盈亏": f"{statistics.get('total_net_pnl', 0):,.2f}",
             "日均盈亏": f"{statistics.get('daily_net_pnl', 0):,.2f}",
         }
-        
-        # 【风险指标】
+
+        # 【风险指标】 - max_ddpercent/return_std已是百分比形式
         risk_metrics = {
             "最大回撤": f"{statistics.get('max_drawdown', 0):,.2f}",
-            "百分比最大回撤": format_percentage(statistics.get('max_ddpercent', 0)),
+            "百分比最大回撤": format_pct_value(statistics.get('max_ddpercent', 0)),
             "最大回撤天数": f"{statistics.get('max_drawdown_duration', 0)}",
-            "收益标准差": format_percentage(statistics.get('return_std', 0)),
+            "收益标准差": format_pct_value(statistics.get('return_std', 0)),
         }
-        
+
         # 【风险调整收益】
         risk_adjusted_metrics = {
             "夏普比率": f"{statistics.get('sharpe_ratio', 0):.2f}",
@@ -1729,19 +2503,19 @@ class MetricsGridWidget(QtWidgets.QWidget):
             "卡尔马比率": f"{statistics.get('calmar_ratio', 0):.2f}",
             "收益回撤比": f"{statistics.get('return_drawdown_ratio', 0):.2f}",
         }
-        
-        # 【交易统计】
+
+        # 【交易统计】 - win_rate/optimal_position_ratio是小数形式
         trading_metrics = {
             "总成交笔数": f"{statistics.get('total_trade_count', 0)}",
             "多头笔数": f"{statistics.get('long_trade_count', 0)}",
             "空头笔数": f"{statistics.get('short_trade_count', 0)}",
-            "胜率": format_percentage(statistics.get('win_rate', 0)),
+            "胜率": format_decimal_pct(statistics.get('win_rate', 0)),
             "平均盈亏比": f"{statistics.get('average_win_loss_ratio', 0):.2f}",
             "获利因子": f"{statistics.get('profit_factor', 0):.2f}",
             "平均每笔盈亏": f"{statistics.get('average_trade', 0):.2f}",
             "最大连续盈利次数": f"{statistics.get('max_consecutive_wins', 0)}",
             "最大连续亏损次数": f"{statistics.get('max_consecutive_losses', 0)}",
-            "最优仓位比例": format_percentage(statistics.get('optimal_position_ratio', 0)),
+            "最优仓位比例": format_decimal_pct(statistics.get('optimal_position_ratio', 0)),
         }
         
         # 【持仓统计】
@@ -1859,36 +2633,38 @@ class MetricsGridWidget(QtWidgets.QWidget):
             from matplotlib.figure import Figure
             import matplotlib
             matplotlib.use('Qt5Agg')
-            
+
             # 准备数据
             months = []
-            returns = []
+            pnls = []  # 改为pnl，表示绝对盈亏（元）
             win_rates = []
-            
+
             for month, stats in sorted(monthly_stats.items()):
                 if isinstance(stats, dict):
                     months.append(f"{month}月")
-                    returns.append(stats.get('return', 0) * 100)  # 转换为百分比
+                    # return字段现在是total_pnl（绝对盈亏，元），不需要乘以100
+                    pnls.append(stats.get('return', 0))
                     win_rates.append(stats.get('win_rate', 0) * 100)  # 转换为百分比
-            
+
             if not months:
                 return {"月度图表": "无有效数据"}
-            
+
             # 创建图表
             fig = Figure(figsize=(8, 4), facecolor='#2a2a2a')
             ax1 = fig.add_subplot(111)
             ax1.set_facecolor('#2a2a2a')
-            
-            # 绘制收益柱状图
-            bars = ax1.bar(months, returns, color='#ff4444', alpha=0.7, label='月度收益(%)')
-            
+
+            # 绘制盈亏柱状图，根据正负值使用不同颜色
+            colors = ['#ff4444' if p >= 0 else '#00aa00' for p in pnls]  # 红涨绿跌
+            bars = ax1.bar(months, pnls, color=colors, alpha=0.7, label='月度盈亏(元)')
+
             # 创建第二个y轴用于胜率折线
             ax2 = ax1.twinx()
-            line = ax2.plot(months, win_rates, color='#ffc107', marker='o', linewidth=2, 
+            line = ax2.plot(months, win_rates, color='#ffc107', marker='o', linewidth=2,
                            markersize=6, label='胜率(%)')
-            
+
             # 设置样式
-            ax1.set_ylabel('收益率 (%)', color='#fff', fontsize=10)
+            ax1.set_ylabel('盈亏 (元)', color='#fff', fontsize=10)
             ax2.set_ylabel('胜率 (%)', color='#fff', fontsize=10)
             ax1.set_xlabel('月份', color='#fff', fontsize=10)
             
@@ -1989,15 +2765,16 @@ class MetricsGridWidget(QtWidgets.QWidget):
             
             # 准备数据
             intervals = []
-            returns = []
+            pnls = []  # 改为pnl，表示绝对盈亏（元）
             win_rates = []
             trade_counts = []
-            
+
             for interval in sorted_intervals:
                 stats = interval_stats[interval]
                 if isinstance(stats, dict):
                     intervals.append(interval)
-                    returns.append(stats.get('return', 0) * 100)  # 转换为百分比
+                    # return字段现在是total_pnl（绝对盈亏，元），不需要乘以100
+                    pnls.append(stats.get('return', 0))
                     win_rates.append(stats.get('win_rate', 0) * 100)  # 转换为百分比
                     trade_counts.append(stats.get('trades', 0))
             
@@ -2012,9 +2789,9 @@ class MetricsGridWidget(QtWidgets.QWidget):
             # 创建X轴位置
             x_pos = range(len(intervals))
             
-            # 绘制收益柱状图，根据正负值使用不同颜色
-            colors = ['#ff4444' if r >= 0 else '#00aa00' for r in returns]  # 红涨绿跌
-            bars = ax1.bar(x_pos, returns, color=colors, alpha=0.7, label='区间收益(%)', width=0.6)
+            # 绘制盈亏柱状图，根据正负值使用不同颜色
+            colors = ['#ff4444' if p >= 0 else '#00aa00' for p in pnls]  # 红涨绿跌
+            bars = ax1.bar(x_pos, pnls, color=colors, alpha=0.7, label='区间盈亏(元)', width=0.6)
             
             # 创建第二个y轴用于胜率折线
             ax2 = ax1.twinx()
@@ -2094,38 +2871,38 @@ class MetricsGridWidget(QtWidgets.QWidget):
                 ax1.axvline(x=night_day_boundary, color='#666', linestyle='--', alpha=0.5, linewidth=1)
             
             # 设置样式
-            ax1.set_ylabel('收益率 (%)', color='#fff', fontsize=11)
+            ax1.set_ylabel('盈亏 (元)', color='#fff', fontsize=11)
             ax2.set_ylabel('胜率 (%)', color='#fff', fontsize=11)
             ax1.set_xlabel('交易时间区间', color='#fff', fontsize=11)
-            
+
             # 设置Y轴范围，确保数据可见
-            if returns and (max(returns) > 0 or min(returns) < 0):
-                y_margin = max(abs(max(returns)), abs(min(returns))) * 0.1
-                ax1.set_ylim(min(returns) - y_margin, max(returns) + y_margin)
-            
+            if pnls and (max(pnls) > 0 or min(pnls) < 0):
+                y_margin = max(abs(max(pnls)), abs(min(pnls))) * 0.1
+                ax1.set_ylim(min(pnls) - y_margin, max(pnls) + y_margin)
+
             if win_rates and max(win_rates) > 0:
                 ax2.set_ylim(0, max(win_rates) * 1.1)
-            
+
             # 设置颜色
             ax1.tick_params(colors='#fff', labelsize=9)
             ax2.tick_params(colors='#fff', labelsize=9)
-            
+
             # 设置边框颜色
             for spine in ax1.spines.values():
                 spine.set_color('#fff')
             for spine in ax2.spines.values():
                 spine.set_color('#fff')
-            
+
             # 添加网格
             ax1.grid(True, alpha=0.3, color='#666', axis='y')
-            
+
             # 在柱状图上显示数值（只在数据点不太多时显示）
             if len(intervals) <= 15:
-                for i, (bar, return_val, trade_count) in enumerate(zip(bars, returns, trade_counts)):
+                for i, (bar, pnl_val, trade_count) in enumerate(zip(bars, pnls, trade_counts)):
                     if trade_count > 0:  # 只在有交易的区间显示数值
                         height = bar.get_height()
-                        ax1.text(bar.get_x() + bar.get_width()/2., height + (0.1 if height >= 0 else -0.3),
-                                f'{return_val:.1f}%', ha='center', va='bottom' if height >= 0 else 'top',
+                        ax1.text(bar.get_x() + bar.get_width()/2., height + (y_margin * 0.1 if height >= 0 else -y_margin * 0.3),
+                                f'{pnl_val:.0f}', ha='center', va='bottom' if height >= 0 else 'top',
                                 color='#fff', fontsize=8, fontweight='bold')
             
             # 在折线图上显示胜率数值（只在数据点不太多时显示）
