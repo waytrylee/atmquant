@@ -7,7 +7,6 @@ MACD指标
 
 from typing import Dict, Any, Tuple, List
 import numpy as np
-import talib
 import pyqtgraph as pg
 
 from vnpy.trader.ui import QtCore, QtGui, QtWidgets
@@ -16,7 +15,7 @@ from vnpy.chart.item import ChartItem
 from vnpy.chart.manager import BarManager
 
 from .indicator_base import ConfigurableIndicator
-from .dyna_array_manager import DynaArrayManager
+from .calculators.macd_calculator import MACDCalculator
 
 
 class Macd3Item(ChartItem, ConfigurableIndicator):
@@ -65,11 +64,9 @@ class Macd3Item(ChartItem, ConfigurableIndicator):
         # 添加放大因子，适应短周期数据
         self.scale_factor = 100.0  # 默认放大100倍
         
-        # 动态数组管理器
-        self.dyna_am = DynaArrayManager(max(short_window, long_window) + 2*(M-1))
-        
         # 数据缓存
         self.macd_data: Dict[int, List[float]] = {}
+        self._needs_recalc = True
         
         # 背离数据
         self.start_bull_indices = []
@@ -100,99 +97,63 @@ class Macd3Item(ChartItem, ConfigurableIndicator):
         """重写update_history方法，确保数据更新时清理缓存"""
         self.macd_data.clear()
         self._values_ranges.clear()
-        # 重新初始化动态数组管理器
-        self.dyna_am = DynaArrayManager(max(self.short_window, self.long_window) + 2*(self.M-1))
-        for bar in history:
-            self.dyna_am.update_bar(bar)
+        self._needs_recalc = True
         super().update_history(history)
     
     def update_bar(self, bar: BarData) -> None:
         """重写update_bar方法，确保新数据更新时清理相关缓存"""
-        self.dyna_am.update_bar(bar)
-        # 清理最后几个数据点的缓存，因为新数据可能影响计算
-        bar_count = self._manager.get_count()
-        keys_to_remove = [k for k in self.macd_data.keys() if k >= bar_count - 10]
-        for key in keys_to_remove:
-            self.macd_data.pop(key, None)
-        
-        # 清空范围缓存
+        self.macd_data.clear()
         self._values_ranges.clear()
+        self._needs_recalc = True
         super().update_bar(bar)
 
-    def _get_macd_value(self, ix: int) -> List[float]:
-        """获取指定索引的 MACD 值，支持增量计算和缓存机制"""
-        # 无效值占位
-        invalid_value = [np.nan, np.nan, np.nan, np.nan]
-        max_ix = self._manager.get_count() - 1
-        if ix < 0 or ix > max_ix:
-            return invalid_value
+    def _ensure_calculated(self) -> None:
+        """全量计算 MACD 数据，委托给 MACDCalculator"""
+        if not self._needs_recalc and self.macd_data:
+            return
 
-        # 如果 MACD 数据尚未计算或索引数据不存在，则增量计算
-        if ix not in self.macd_data:
-            bars = self._manager.get_all_bars()
-            
-            # 检查数据量是否足够
-            min_required = max(self.short_window, self.long_window) + self.M * 2
-            if len(bars) < min_required:
-                # 数据不足以计算MACD，返回无效值
-                self.macd_data[ix] = invalid_value
-                return invalid_value
-                
-            close_prices = [bar.close_price for bar in bars]
+        bars = self._manager.get_all_bars()
+        min_required = max(self.short_window, self.long_window) + self.M * 2
+        if not bars or len(bars) < min_required:
+            return
 
-            # 确定增量计算范围
-            start_idx = len(self.macd_data)
-            try:
-                # 计算MACD指标
-                diffs, deas, macds = talib.MACD(
-                    np.array(close_prices),
-                    fastperiod=self.short_window,
-                    slowperiod=self.long_window,
-                    signalperiod=self.M
-                )
-                
-                # 检查是否有有效的结果
-                valid_data = not np.isnan(deas).all()
-                
-                if valid_data:
-                    try:
-                        # 计算慢线
-                        slow_deas = talib.EMA(deas, self.M)
-                        
-                        # 检测是否为短周期小数值数据
-                        valid_macds = macds[~np.isnan(macds)]
-                        if len(valid_macds) > 0 and np.max(np.abs(valid_macds)) < 1.0:
-                            # 对小数值应用放大因子
-                            diffs = diffs * self.scale_factor
-                            deas = deas * self.scale_factor
-                            macds = macds * self.scale_factor
-                            slow_deas = slow_deas * self.scale_factor
-                            
-                    except Exception as e:
-                        # 如果计算慢线出错，使用替代值
-                        slow_deas = np.full_like(deas, np.nan)
-                else:
-                    # 如果没有有效数据，所有指标都设置为NaN
+        try:
+            close_array = np.array([bar.close_price for bar in bars])
+            diffs, deas, macds = MACDCalculator.compute_arrays(
+                close_array, self.short_window, self.long_window, self.M
+            )
+
+            # 计算慢线
+            valid_data = not np.isnan(deas).all()
+            if valid_data:
+                try:
+                    slow_deas = MACDCalculator.compute_ema(deas, self.M)
+                except Exception:
                     slow_deas = np.full_like(deas, np.nan)
+            else:
+                slow_deas = np.full_like(deas, np.nan)
 
-                # 更新缓存数据
-                for n in range(start_idx, len(diffs)):
-                    self.macd_data[n] = [diffs[n], deas[n], macds[n], slow_deas[n]]
+            # 检测是否为短周期小数值数据，应用放大因子
+            valid_macds = macds[~np.isnan(macds)]
+            if len(valid_macds) > 0 and np.max(np.abs(valid_macds)) < 1.0:
+                diffs = diffs * self.scale_factor
+                deas = deas * self.scale_factor
+                macds = macds * self.scale_factor
+                slow_deas = slow_deas * self.scale_factor
 
-            except Exception:
-                # 出现异常时返回无效值（静默失败）
-                self.macd_data[ix] = invalid_value
-                return invalid_value
+            self.macd_data.clear()
+            for n in range(len(diffs)):
+                self.macd_data[n] = [diffs[n], deas[n], macds[n], slow_deas[n]]
+            self._needs_recalc = False
+        except Exception:
+            pass
 
-        # 对于新的K线，使用动态计算
-        if self.dyna_am.inited and ix not in self.macd_data:
-            try:
-                diff, dea, macd, slow_dea = self.dyna_am.macd3(self.short_window, self.long_window, self.M)
-                self.macd_data[ix] = [diff, dea, macd, slow_dea]
-            except:
-                self.macd_data[ix] = invalid_value
-
-        # 返回缓存值
+    def _get_macd_value(self, ix: int) -> List[float]:
+        """获取指定索引的 MACD 值"""
+        invalid_value = [np.nan, np.nan, np.nan, np.nan]
+        if ix < 0:
+            return invalid_value
+        self._ensure_calculated()
         return self.macd_data.get(ix, invalid_value)
 
     def _draw_bar_picture(self, ix: int, bar: BarData) -> QtGui.QPicture:
@@ -359,6 +320,67 @@ class Macd3Item(ChartItem, ConfigurableIndicator):
             max_price += margin
 
         return min_price, max_price
+
+    def get_current_values(self) -> Dict[str, Any]:
+        """
+        获取当前指标值，用于AI分析
+
+        Returns:
+            包含当前MACD数据的字典
+        """
+        bars = self._manager.get_all_bars()
+        if not bars:
+            return {}
+
+        ix = len(bars) - 1
+
+        # 使用_get_macd_value确保数据被计算（即使指标被隐藏）
+        macd_values = self._get_macd_value(ix)
+        if all(np.isnan(val) for val in macd_values):
+            return {}
+        diff = macd_values[0]  # DIFF
+        dea = macd_values[1]   # DEA
+        macd_hist = macd_values[2]  # MACD柱状图
+
+        # 获取前一个数据
+        prev_macd_values = self._get_macd_value(ix - 1)
+        prev_macd_hist = prev_macd_values[2] if not all(np.isnan(val) for val in prev_macd_values) else None
+
+        # 获取当前价格
+        bar = bars[ix]
+        current_price = bar.close_price if bar else 0
+
+        # 确定趋势
+        histogram = macd_hist
+        trend = "up" if histogram > 0 else "down" if histogram < 0 else "neutral"
+
+        # 检查金叉死叉
+        cross_signal = None
+        if prev_macd_values:
+            prev_diff = prev_macd_values[0]
+            prev_dea = prev_macd_values[1]
+            # 金叉：DIFF上穿DEA
+            if prev_diff <= prev_dea and diff > dea:
+                cross_signal = "golden_cross"
+            # 死叉：DIFF下穿DEA
+            elif prev_diff >= prev_dea and diff < dea:
+                cross_signal = "death_cross"
+
+        return {
+            "macd": round(macd_hist, 4),
+            "diff": round(diff, 4),
+            "signal": round(dea, 4),
+            "histogram": round(macd_hist, 4),
+            "previous_histogram": round(prev_macd_hist, 4) if prev_macd_hist is not None else None,
+            "trend": trend,
+            "cross_signal": cross_signal,
+            "current_price": round(current_price, 2),
+            "parameters": {
+                "short_window": self.short_window,
+                "long_window": self.long_window,
+                "signal_window": self.M
+            }
+        }
 
     def get_info_text(self, ix: int) -> str:
         """获取MACD信息文本，包含数值和信号解读"""
@@ -541,12 +563,11 @@ class Macd3Item(ChartItem, ConfigurableIndicator):
         """清空所有数据和缓存"""
         self.macd_data.clear()
         self._values_ranges.clear()
+        self._needs_recalc = True
         self.start_bull_indices.clear()
         self.end_bull_indices.clear()
         self.start_bear_indices.clear()
         self.end_bear_indices.clear()
-        # 重新初始化动态数组管理器
-        self.dyna_am = DynaArrayManager(max(self.short_window, self.long_window) + 2*(self.M-1))
         super().clear_all()
 
     # 配置相关方法
@@ -570,7 +591,7 @@ class Macd3Item(ChartItem, ConfigurableIndicator):
         # 重新初始化
         self.macd_data.clear()
         self._values_ranges.clear()
-        self.dyna_am = DynaArrayManager(max(self.short_window, self.long_window) + 2*(self.M-1))
+        self._needs_recalc = True
         self.update()
 
     def get_current_config(self) -> Dict[str, Any]:

@@ -208,27 +208,58 @@ class FuturesDataDownloader:
             
             # 转换为vnpy格式
             bars = []
+            import math
             for i in range(len(klines)):
+                # 获取时间戳并转换
+                timestamp = klines.iloc[i]["datetime"]
+                dt = datetime.fromtimestamp(timestamp / 1e9)
+                
+                # 跳过异常时间（1970年等无效数据）
+                if dt.year < 2000:
+                    continue
+                
+                # 获取价格数据，将NaN转换为0
+                open_price = klines.open.iloc[i]
+                high_price = klines.high.iloc[i]
+                low_price = klines.low.iloc[i]
+                close_price = klines.close.iloc[i]
+                volume = klines.volume.iloc[i]
+                
+                # 将NaN转换为0（保留数据但标记为无效）
+                if math.isnan(open_price):
+                    open_price = 0
+                if math.isnan(high_price):
+                    high_price = 0
+                if math.isnan(low_price):
+                    low_price = 0
+                if math.isnan(close_price):
+                    close_price = 0
+                if math.isnan(volume):
+                    volume = 0
+                
                 bar = BarData(
                     gateway_name="TQ",
                     symbol=symbol + (month or ""),
                     exchange=vnpy_exchange,
-                    datetime=datetime.fromtimestamp(klines.iloc[i]["datetime"] / 1e9),
+                    datetime=dt,
                     interval=interval,
-                    volume=klines.volume.iloc[i],
-                    open_price=klines.open.iloc[i],
-                    high_price=klines.high.iloc[i],
-                    low_price=klines.low.iloc[i],
-                    close_price=klines.close.iloc[i],
-                    open_interest=klines.close_oi.iloc[i] if 'close_oi' in klines.columns else 0
+                    volume=volume,
+                    open_price=open_price,
+                    high_price=high_price,
+                    low_price=low_price,
+                    close_price=close_price,
+                    open_interest=klines.close_oi.iloc[i] if 'close_oi' in klines.columns and not math.isnan(klines.close_oi.iloc[i]) else 0
                 )
                 bars.append(bar)
             
             # 批量保存到数据库
-            self.save_bars_batch(bars)
-            
-            print(f"✓ {vt_symbol} 下载完成，共 {len(bars)} 条数据")
-            return True
+            if bars:
+                self.save_bars_batch(bars)
+                print(f"✓ {vt_symbol} 下载完成，共 {len(bars)} 条数据")
+                return True
+            else:
+                print(f"⚠️  {vt_symbol} 无有效数据")
+                return False
             
         except Exception as e:
             print(f"✗ {vt_symbol} 下载失败: {e}")
@@ -238,18 +269,26 @@ class FuturesDataDownloader:
         """批量保存K线数据"""
         if not bars:
             return
-        
+
         total = len(bars)
         saved = 0
-        
+        failed = 0
+
         for i in range(0, total, batch_size):
             batch = bars[i:i + batch_size]
             try:
                 self.database.save_bar_data(batch)
                 saved += len(batch)
-                print(f"  保存进度: {saved}/{total}")
+                # 每1000条显示一次进度
+                if saved % 1000 == 0:
+                    print(f"  保存进度: {saved}/{total}")
             except Exception as e:
-                print(f"  保存失败: {e}")
+                failed += len(batch)
+                print(f"  ⚠️  保存失败 ({len(batch)}条): {e}")
+
+        # 最终统计
+        if total > 100:
+            print(f"  ✓ 保存完成: {saved}/{total} 条")
     
     def download_symbol_data(
         self, 

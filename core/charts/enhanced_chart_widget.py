@@ -45,10 +45,13 @@ EXTENDED_INDICATORS_CONFIG = {
     "smart_money": {"module": "smart_money_channels", "class": "SmartMoneyChannelsItem", "type": "main", "default_visible": False, "configurable": True},
     "zlema": {"module": "zlema_item", "class": "ZlemaItem", "type": "main", "default_visible": False, "configurable": True},
     "supertrend": {"module": "supertrend_item", "class": "SupertrendItem", "type": "main", "default_visible": False, "configurable": True},
-    "adaptive_macd": {"module": "adaptive_macd_deluxe_item", "class": "AdaptiveMacdDeluxeItem", "type": "sub", "default_visible": False, "min_height": 120, "max_height": 180, "configurable": True},
-    "squeeze": {"module": "squeeze_momentum_item", "class": "SqueezeMomentumItem", "type": "sub", "default_visible": False, "min_height": 100, "max_height": 150, "configurable": True},
-    "supertrended_rsi": {"module": "supertrended_rsi_item", "class": "SupertrendedRsiItem", "type": "sub", "default_visible": False, "min_height": 100, "max_height": 150, "configurable": True},
-    "wavetrend": {"module": "wavetrend_item", "class": "WaveTrendItem", "type": "sub", "default_visible": False, "min_height": 100, "max_height": 150, "configurable": True},
+    "smc": {"module": "smc.smart_money_concept_item", "class": "SmartMoneyConceptItem", "type": "main", "default_visible": False, "configurable": True},
+    "harmonic": {"module": "harmonic_pattern_item", "class": "HarmonicPatternItem", "type": "main", "default_visible": False, "configurable": True},
+    "kalman": {"module": "kalman_item", "class": "KalmanItem", "type": "main", "default_visible": False, "configurable": True},
+    "adaptive_macd": {"module": "adaptive_macd_deluxe_item", "class": "AdaptiveMacdDeluxeItem", "type": "sub", "default_visible": True, "min_height": 120, "max_height": 180, "configurable": True},
+    "squeeze": {"module": "squeeze_momentum_item", "class": "SqueezeMomentumItem", "type": "sub", "default_visible": False, "min_height": 100, "max_height": 180, "configurable": True},
+    "supertrended_rsi": {"module": "supertrended_rsi_item", "class": "SupertrendedRsiItem", "type": "sub", "default_visible": True, "min_height": 100, "max_height": 180, "configurable": True},
+    "wavetrend": {"module": "wavetrend_item", "class": "WaveTrendItem", "type": "sub", "default_visible": False, "min_height": 100, "max_height": 180, "configurable": True},
 }
 
 # 动态导入扩展指标
@@ -72,10 +75,10 @@ class EnhancedChartWidget(ChartWidget):
             "ema": [MultiEmaItem, "ema", False, True],
         }
         self.sub_indicators = {
-            "volume": [VolumeItem, "volume", True, 120, 200, VOLUME_CONFIGURABLE],
-            "macd": [Macd3Item, "macd", True, 120, 180, True],
-            "rsi": [RsiItem, "rsi", False, 100, 150, True],
-            "dmi": [DmiItem, "dmi", True, 100, 150, True],
+            "volume": [VolumeItem, "volume", True, 120, 180, VOLUME_CONFIGURABLE],
+            "macd": [Macd3Item, "macd", False, 120, 180, True],
+            "rsi": [RsiItem, "rsi", False, 100, 180, True],
+            "dmi": [DmiItem, "dmi", False, 100, 180, True],
         }
         
         # 加载扩展指标
@@ -113,6 +116,9 @@ class EnhancedChartWidget(ChartWidget):
         # 光标管理器
         self.cursor_manager = None
 
+        # 独立的K线形态指标（不继承ChartItem）
+        self.candlestick_patterns = None
+
         super().__init__(parent)
         self.setWindowTitle("增强版K线图表")
         
@@ -133,7 +139,7 @@ class EnhancedChartWidget(ChartWidget):
                 self._items[key].hide()
 
         for name, (cls, key, visible, min_h, max_h, _) in self.sub_indicators.items():
-            self.add_plot(name, minimum_height=min_h, hide_x_axis=True)
+            self.add_plot(name, minimum_height=min_h, maximum_height=max_h, hide_x_axis=True)
             self.add_item(cls, name, key)
             self.original_heights[name] = {"minimum_height": min_h, "maximum_height": max_h}
             if not visible:
@@ -146,7 +152,21 @@ class EnhancedChartWidget(ChartWidget):
         self.cursor_manager.setup()
         self.cursor_manager.relocate_x_label()
 
-    def add_plot(self, plot_name: str, minimum_height: int = 80, hide_x_axis: bool = False) -> None:
+        # 初始化独立的K线形态指标
+        self.init_candlestick_patterns()
+
+    def init_candlestick_patterns(self):
+        """初始化蜡烛图形态指标"""
+        if self.candlestick_patterns is None:
+            try:
+                from core.indicators.candlestick_patterns_item import CandlestickPatternsItem
+                self.candlestick_patterns = CandlestickPatternsItem()
+                self.candlestick_patterns.set_chart(self)
+            except ImportError:
+                pass
+            self.candlestick_patterns.set_chart(self)
+
+    def add_plot(self, plot_name: str, minimum_height: int = 80, maximum_height: int = None, hide_x_axis: bool = False) -> None:
         """重写add_plot使用ExtendableViewBox"""
         viewbox = ExtendableViewBox(self)
         plot = pg.PlotItem(axisItems={"bottom": self._get_new_x_axis()}, viewBox=viewbox, name=plot_name)
@@ -158,6 +178,8 @@ class EnhancedChartWidget(ChartWidget):
         plot.setRange(xRange=(0, 1), yRange=(0, 1))
         plot.hideButtons()
         plot.setMinimumHeight(minimum_height)
+        if maximum_height is not None:
+            plot.setMaximumHeight(maximum_height)
         if hide_x_axis:
             plot.hideAxis("bottom")
         if not self._first_plot:
@@ -242,6 +264,29 @@ class EnhancedChartWidget(ChartWidget):
         w.move(10, 5)
         self.main_controls_widget = w
 
+        # 手动添加蜡烛图形态指标控制（独立组件，不在 main_indicators 中）
+        if self.candlestick_patterns:
+            container = QtWidgets.QHBoxLayout()
+            container.setContentsMargins(0, 0, 0, 0)
+            container.setSpacing(0)
+            cb = QtWidgets.QCheckBox()
+            cb.setChecked(True)  # 默认启用
+            cb.setFixedSize(16, 16)
+            cb.stateChanged.connect(self._toggle_candlestick_patterns)
+            self.candlestick_patterns_checkbox = cb
+            container.addWidget(cb)
+            lbl = QtWidgets.QLabel("candlestick_patterns")
+            lbl.setStyleSheet("QLabel { margin: 0; padding: 0; }")
+            container.addWidget(lbl)
+            # 配置按钮
+            btn = QtWidgets.QPushButton("[x]")
+            btn.setFixedSize(20, 20)
+            btn.setStyleSheet("QPushButton { background: transparent; border: none; font-size: 12px; }")
+            btn.clicked.connect(self._configure_candlestick_patterns)
+            container.addWidget(btn)
+            layout.addLayout(container)
+            w.adjustSize()
+
     def _create_sub_indicator_controls(self):
         """创建副图指标控制"""
         w = QtWidgets.QWidget(self)
@@ -316,12 +361,12 @@ class EnhancedChartWidget(ChartWidget):
         """切换副图指标"""
         if name not in self.sub_indicators:
             return
-        cls, key, _, min_h, _, _ = self.sub_indicators[name]
+        cls, key, _, min_h, max_h, _ = self.sub_indicators[name]
         checked = state == QtCore.Qt.Checked.value
         
         if checked:
             if name not in self._plots:
-                self.add_plot(name, minimum_height=min_h)
+                self.add_plot(name, minimum_height=min_h, maximum_height=max_h)
                 self.add_item(cls, name, key)
             self._plots[name].show()
             if key in self._items:
@@ -369,6 +414,31 @@ class EnhancedChartWidget(ChartWidget):
         finally:
             item.apply_config = orig
 
+    def _toggle_candlestick_patterns(self, state: int):
+        """切换蜡烛图形态指标显示"""
+        if not self.candlestick_patterns:
+            return
+        checked = state == QtCore.Qt.Checked.value
+        if checked:
+            # 重新检测并显示形态
+            bars = []
+            for ix in range(self._manager.get_count()):
+                bars.append(self._manager.get_bar(ix))
+            if bars:
+                self.candlestick_patterns.on_history_updated(bars)
+        else:
+            # 清除形态显示
+            self.candlestick_patterns.clear_visualization()
+
+    def _configure_candlestick_patterns(self):
+        """配置蜡烛图形态指标"""
+        if not self.candlestick_patterns:
+            return
+        dialog = self.candlestick_patterns.get_config_dialog(self)
+        try:
+            dialog.exec_()
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "配置错误", f"配置蜡烛图形态指标时发生错误：\n{str(e)}")
 
     def _create_interval_panel(self):
         """创建周期面板"""
@@ -428,10 +498,17 @@ class EnhancedChartWidget(ChartWidget):
         
         if self.base_minute_bars:
             bars = self.base_minute_bars if self._actual_interval == "1m" else self._aggregate_bars(self.base_minute_bars, self._actual_interval)
+
+            # 清理所有指标（包括独立的K线形态指标）
             for item in self._items.values():
                 if hasattr(item, "clear_all"):
                     try: item.clear_all()
                     except: pass
+            # 清理独立的K线形态指标
+            if self.candlestick_patterns:
+                try: self.candlestick_patterns.clear_all()
+                except: pass
+
             self._manager.clear_all()
             for bar in bars:
                 self._manager.update_bar(bar)
@@ -440,6 +517,13 @@ class EnhancedChartWidget(ChartWidget):
                     if hasattr(item, "update_history"): item.update_history(bars)
                     if hasattr(item, "update"): item.update()
                 except: pass
+
+            # 更新独立的K线形态指标（仅在勾选时）
+            if self.candlestick_patterns and hasattr(self, 'candlestick_patterns_checkbox'):
+                if self.candlestick_patterns_checkbox.isChecked():
+                    try: self.candlestick_patterns.on_history_updated(bars)
+                    except: pass
+
             self._update_plot_limits()
             self.move_to_right()
             self.update()
@@ -480,6 +564,7 @@ class EnhancedChartWidget(ChartWidget):
         """切换主图专注"""
         if self.focus_mode == "main":
             self._restore_plot_visibility()
+            self._restore_plot_heights()
             self.focus_mode = None
         else:
             self._save_plot_visibility()
@@ -490,10 +575,12 @@ class EnhancedChartWidget(ChartWidget):
         """切换副图专注"""
         if self.focus_mode == name:
             self._restore_plot_visibility()
+            self._restore_plot_heights()
             self.focus_mode = None
         else:
             self._save_plot_visibility()
             self._hide_all_sub_plots_except(name)
+            self._remove_plot_max_height(name)
             self.focus_mode = name
 
     def _save_plot_visibility(self):
@@ -508,6 +595,18 @@ class EnhancedChartWidget(ChartWidget):
         if self.cursor_manager:
             self.cursor_manager.setup()
             self.cursor_manager.relocate_x_label()
+
+    def _remove_plot_max_height(self, plot_name: str):
+        """移除副图的最大高度限制（专注模式）"""
+        if plot_name in self._plots:
+            self._plots[plot_name].setMaximumHeight(16777215)  # Qt的默认最大值
+
+    def _restore_plot_heights(self):
+        """恢复副图的高度限制（退出专注模式）"""
+        for name in self.sub_indicators:
+            if name in self._plots and name in self.original_heights:
+                max_h = self.original_heights[name]["maximum_height"]
+                self._plots[name].setMaximumHeight(max_h)
 
     def _hide_all_sub_plots(self):
         for n, p in self._plots.items():
@@ -539,6 +638,16 @@ class EnhancedChartWidget(ChartWidget):
             super().update_history(self._aggregate_bars(self.base_minute_bars, self.current_interval))
         else:
             super().update_history(history)
+
+        # 触发K线形态指标更新（仅在勾选时）
+        if self.candlestick_patterns and hasattr(self, 'candlestick_patterns_checkbox'):
+            if self.candlestick_patterns_checkbox.isChecked():
+                # 获取当前显示的K线数据
+                display_bars = []
+                for ix in range(self._manager.get_count()):
+                    display_bars.append(self._manager.get_bar(ix))
+                self.candlestick_patterns.on_history_updated(display_bars)
+
         self._last_tick_volume = 0
         self.move_to_right()
 
@@ -550,6 +659,15 @@ class EnhancedChartWidget(ChartWidget):
         self._update_plot_limits()
         for item in self._items.values():
             if hasattr(item, "update"): item.update()
+
+        # 触发K线形态指标更新（仅在勾选时）
+        if self.candlestick_patterns and hasattr(self, 'candlestick_patterns_checkbox'):
+            if self.candlestick_patterns_checkbox.isChecked():
+                # 获取所有K线数据
+                all_bars = []
+                for ix in range(self._manager.get_count()):
+                    all_bars.append(self._manager.get_bar(ix))
+                self.candlestick_patterns.on_bar_updated(bar, all_bars)
 
     def update_tick(self, tick) -> None:
         """更新Tick"""
@@ -790,7 +908,17 @@ class EnhancedChartWidget(ChartWidget):
         if not minute_bars:
             return []
         interval_str = target_interval.value if isinstance(target_interval, Interval) else target_interval
-        minutes = {"1m": 1, "3m": 3, "5m": 5, "15m": 15, "30m": 30, "1h": 60, "d": 1440}.get(interval_str, 1)
+        # 支持多种时间间隔格式：简写（1m, 5m, 15m, 1h）和完整格式（1min, 5min, 15min, 1hour）
+        minutes = {
+            "1m": 1, "1min": 1,
+            "3m": 3, "3min": 3,
+            "5m": 5, "5min": 5,
+            "15m": 15, "15min": 15,
+            "30m": 30, "30min": 30,
+            "1h": 60, "1hour": 60,
+            "4h": 240, "4hour": 240,
+            "d": 1440, "day": 1440
+        }.get(interval_str, 1)
         if minutes == 1:
             return minute_bars
 

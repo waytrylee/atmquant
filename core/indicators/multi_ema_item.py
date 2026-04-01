@@ -6,13 +6,13 @@
 
 from typing import Dict, Tuple, Any
 import numpy as np
-import talib
 from vnpy.trader.object import BarData
 from vnpy.chart.item import CandleItem
 from vnpy.trader.ui import QtGui, QtCore, QtWidgets
 import pyqtgraph as pg
 
 from .indicator_base import ConfigurableIndicator
+from .calculators.ema_calculator import EMACalculator
 
 
 class MultiEmaItem(CandleItem, ConfigurableIndicator):
@@ -20,7 +20,7 @@ class MultiEmaItem(CandleItem, ConfigurableIndicator):
     绘制多条指数移动平均线(EMA)的类 - 参考原始代码样式
     """
 
-    def __init__(self, manager, periods: Tuple[int, ...] = (12, 26, 50)):
+    def __init__(self, manager, periods: Tuple[int, ...] = (9, 20, 60)):
         """
         初始化
         """
@@ -54,44 +54,27 @@ class MultiEmaItem(CandleItem, ConfigurableIndicator):
         self.lines[ema_window] = pg.mkPen(color=color, width=width)
         self.ema_data[ema_window] = {}
 
+    def _ensure_calculated(self, ema_window: int) -> None:
+        """全量计算指定周期的 EMA 数据，委托给 EMACalculator"""
+        if self.ema_data.get(ema_window):
+            return
+        bars = self._manager.get_all_bars()
+        if not bars or len(bars) < ema_window:
+            return
+        close_array = np.array([bar.close_price for bar in bars])
+        ema_array = EMACalculator.compute_array(close_array, ema_window)
+        self.ema_data[ema_window] = {}
+        for n, value in enumerate(ema_array):
+            self.ema_data[ema_window][n] = value
+
     def get_ema_value(self, ix: int, ema_window: int) -> float:
-        """
-        获取指定窗口大小的 EMA 值 - 参考原始代码
-        """
+        """获取指定窗口大小的 EMA 值"""
         if ix < 0:
             return np.nan
-
-        # 计算所有 EMA 数据
-        if not self.ema_data[ema_window]:
-            bars = self._manager.get_all_bars()
-            close_data = [bar.close_price for bar in bars]
-            ema_array = talib.EMA(np.array(close_data), ema_window)
-
-            for n, value in enumerate(ema_array):
-                self.ema_data[ema_window][n] = value
-
-        # 返回已计算值
-        if ix in self.ema_data[ema_window]:
+        self._ensure_calculated(ema_window)
+        if ema_window in self.ema_data and ix in self.ema_data[ema_window]:
             return self.ema_data[ema_window][ix]
-
-        # 计算新的值
-        close_data = []
-        for n in range(ix - ema_window + 1, ix + 1):
-            bar = self._manager.get_bar(n)
-            if bar is not None:  # 添加检查，确保bar不为None
-                close_data.append(bar.close_price)
-            else:
-                # 如果bar为None，使用前一个有效值或默认值
-                if close_data:
-                    close_data.append(close_data[-1])  # 使用前一个值
-                else:
-                    close_data.append(0.0)  # 使用默认值
-
-        ema_array = talib.EMA(np.array(close_data), ema_window)
-        ema_value = ema_array[-1]
-        self.ema_data[ema_window][ix] = ema_value
-
-        return ema_value
+        return np.nan
 
     def _draw_bar_picture(self, ix: int, bar: BarData) -> QtGui.QPicture:
         """
@@ -118,6 +101,57 @@ class MultiEmaItem(CandleItem, ConfigurableIndicator):
 
         painter.end()
         return picture
+
+    def get_current_values(self) -> Dict[str, Any]:
+        """
+        获取当前指标值，用于AI分析
+
+        Returns:
+            包含当前EMA数据的字典
+        """
+        bars = self._manager.get_all_bars()
+        if not bars:
+            return {}
+
+        ix = len(bars) - 1
+        ema_values = {}
+        prev_ema_values = {}
+
+        # 使用get_ema_value确保数据被计算（即使指标被隐藏）
+        for ema_window in self.ema_data.keys():
+            value = self.get_ema_value(ix, ema_window)
+            if not np.isnan(value):
+                ema_values[ema_window] = value
+
+            prev_value = self.get_ema_value(ix - 1, ema_window)
+            if not np.isnan(prev_value):
+                prev_ema_values[ema_window] = prev_value
+
+        if not ema_values:
+            return {}
+
+        # 获取当前价格
+        bar = bars[ix]
+        current_price = bar.close_price if bar else 0
+
+        # 判断趋势（基于短期和长期EMA）
+        windows = sorted(ema_values.keys())
+        if len(windows) >= 2:
+            short_window = windows[0]
+            long_window = windows[-1]
+            short_ema = ema_values[short_window]
+            long_ema = ema_values[long_window]
+            trend = "up" if short_ema > long_ema else "down" if short_ema < long_ema else "neutral"
+        else:
+            trend = "unknown"
+
+        return {
+            "values": {k: round(v, 2) for k, v in ema_values.items()},
+            "previous_values": {k: round(v, 2) for k, v in prev_ema_values.items()} if prev_ema_values else {},
+            "trend": trend,
+            "current_price": round(current_price, 2),
+            "windows": windows
+        }
 
     def get_info_text(self, ix: int) -> str:
         """
@@ -405,6 +439,18 @@ class MultiEmaItem(CandleItem, ConfigurableIndicator):
 
         return "\n".join(info_lines)
 
+    def update_history(self, history) -> None:
+        """重写update_history，清除缓存触发重算"""
+        for k in self.ema_data:
+            self.ema_data[k].clear()
+        super().update_history(history)
+
+    def update_bar(self, bar: BarData) -> None:
+        """重写update_bar，清除缓存让下次访问触发重算"""
+        for k in self.ema_data:
+            self.ema_data[k].clear()
+        super().update_bar(bar)
+
     def clear_all(self) -> None:
         """清除所有数据"""
         super().clear_all()
@@ -524,5 +570,5 @@ class MultiEmaItem(CandleItem, ConfigurableIndicator):
     def _get_default_config(self) -> Dict[str, Any]:
         """获取默认配置"""
         return {
-            'periods': "12,26,50"
+            'periods': "9,20,60"
         }

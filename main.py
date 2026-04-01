@@ -54,7 +54,7 @@ def main():
         from vnpy_ctastrategy import CtaStrategyApp
         from vnpy_datamanager import DataManagerApp
         from vnpy_ctabacktester import CtaBacktesterApp
-        from vnpy_chartwizard import ChartWizardApp
+        from vnpy_charttrader import ChartTraderApp
 
         main_engine.add_app(CtaStrategyApp)
         print("✓ CTA策略引擎加载成功")
@@ -65,8 +65,8 @@ def main():
         main_engine.add_app(CtaBacktesterApp)
         print("✓ 回测引擎加载成功")
 
-        main_engine.add_app(ChartWizardApp)
-        print("✓ K线图表模块加载成功")
+        main_engine.add_app(ChartTraderApp)
+        print("✓ 图表交易模块加载成功")
         
         # 创建主窗口
         main_window = MainWindow(main_engine, event_engine)
@@ -75,6 +75,31 @@ def main():
         print("✓ 图形界面启动成功")
         print("\n🎉 ATMQuant启动完成！")
         
+
+        # 自动连接CTP网关
+        try:
+            import os
+            from dotenv import load_dotenv
+            from vnpy.trader.utility import load_json
+
+            load_dotenv()
+
+            auto_connect = os.getenv("CTP_AUTO_CONNECT", "false").lower() == "true"
+            if auto_connect:
+                # 读取connect_ctp.json配置文件
+                filename = "connect_ctp.json"
+                ctp_setting = load_json(filename)
+
+                if ctp_setting:
+                    main_engine.connect(ctp_setting, "CTP")
+                    print("✓ CTP网关自动连接中...")
+                else:
+                    print("⚠️  未找到connect_ctp.json配置文件，跳过自动连接")
+        except Exception as e:
+            print(f"⚠️  CTP自动连接失败: {e}")
+
+        print("\n🎉 ATMTrader启动完成！")
+
         # 运行应用
         qapp.exec()
         

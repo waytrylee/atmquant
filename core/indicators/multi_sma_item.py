@@ -6,13 +6,13 @@
 
 from typing import Dict, Tuple, Any
 import numpy as np
-import talib
 from vnpy.trader.object import BarData
 from vnpy.chart.item import CandleItem
 from vnpy.trader.ui import QtGui, QtCore, QtWidgets
 import pyqtgraph as pg
 
 from .indicator_base import ConfigurableIndicator
+from .calculators.sma_calculator import SMACalculator
 
 
 class MultiSmaItem(CandleItem, ConfigurableIndicator):
@@ -20,7 +20,7 @@ class MultiSmaItem(CandleItem, ConfigurableIndicator):
     绘制多条简单移动平均线(SMA)的类 - 参考原始代码样式
     """
 
-    def __init__(self, manager, periods: Tuple[int, ...] = (20, 60, 100)):
+    def __init__(self, manager, periods: Tuple[int, ...] = (25, 60, 100)):
         """
         初始化
         """
@@ -30,16 +30,16 @@ class MultiSmaItem(CandleItem, ConfigurableIndicator):
         self.lines: Dict[int, QtGui.QPen] = {}  # 存储窗口大小和对应的画笔
         self.sma_data: Dict[int, Dict[int, float]] = {}  # 存储多个窗口的均线数据
         
-        # 设置颜色
+        # 设置颜色 - 按照短线、中线、慢线惯例
         colors = [
-            (100, 100, 255),    # 蓝色
-            (255, 255, 0),      # 黄色
-            (255, 0, 255),      # 紫色
-            (0, 255, 255),      # 青色
-            (255, 128, 0),      # 橙色
-            (128, 255, 128),    # 浅绿色
-            (255, 128, 128),    # 浅红色
-            (128, 128, 255),    # 浅蓝色
+            (255, 255, 255),    # 白色 - 短线(25)，最活跃
+            (255, 0, 255),      # 紫色 - 中线(60)，中性过渡
+            (100, 100, 255),    # 蓝色 - 慢线(100)，稳重
+            (0, 255, 255),      # 青色 - 额外线
+            (255, 128, 0),      # 橙色 - 额外线
+            (128, 255, 128),    # 浅绿色 - 额外线
+            (255, 128, 128),    # 浅红色 - 额外线
+            (128, 128, 255),    # 浅蓝色 - 额外线
         ]
         
         # 为每个周期设置画笔 - 参考原始代码样式
@@ -54,44 +54,27 @@ class MultiSmaItem(CandleItem, ConfigurableIndicator):
         self.lines[sma_window] = pg.mkPen(color=color, width=width)
         self.sma_data[sma_window] = {}
 
+    def _ensure_calculated(self, sma_window: int) -> None:
+        """全量计算指定周期的 SMA 数据，委托给 SMACalculator"""
+        if self.sma_data.get(sma_window):
+            return
+        bars = self._manager.get_all_bars()
+        if not bars or len(bars) < sma_window:
+            return
+        close_array = np.array([bar.close_price for bar in bars])
+        sma_array = SMACalculator.compute_array(close_array, sma_window)
+        self.sma_data[sma_window] = {}
+        for n, value in enumerate(sma_array):
+            self.sma_data[sma_window][n] = value
+
     def get_sma_value(self, ix: int, sma_window: int) -> float:
-        """
-        获取指定窗口大小的 SMA 值 - 参考原始代码
-        """
+        """获取指定窗口大小的 SMA 值"""
         if ix < 0:
             return np.nan
-
-        # 计算所有 SMA 数据
-        if not self.sma_data[sma_window]:
-            bars = self._manager.get_all_bars()
-            close_data = [bar.close_price for bar in bars]
-            sma_array = talib.SMA(np.array(close_data), sma_window)
-
-            for n, value in enumerate(sma_array):
-                self.sma_data[sma_window][n] = value
-
-        # 返回已计算值
-        if ix in self.sma_data[sma_window]:
+        self._ensure_calculated(sma_window)
+        if sma_window in self.sma_data and ix in self.sma_data[sma_window]:
             return self.sma_data[sma_window][ix]
-
-        # 计算新的值
-        close_data = []
-        for n in range(ix - sma_window + 1, ix + 1):
-            bar = self._manager.get_bar(n)
-            if bar is not None:  # 添加检查，确保bar不为None
-                close_data.append(bar.close_price)
-            else:
-                # 如果bar为None，使用前一个有效值或默认值
-                if close_data:
-                    close_data.append(close_data[-1])  # 使用前一个值
-                else:
-                    close_data.append(0.0)  # 使用默认值
-
-        sma_array = talib.SMA(np.array(close_data), sma_window)
-        sma_value = sma_array[-1]
-        self.sma_data[sma_window][ix] = sma_value
-
-        return sma_value
+        return np.nan
 
     def _draw_bar_picture(self, ix: int, bar: BarData) -> QtGui.QPicture:
         """
@@ -118,6 +101,57 @@ class MultiSmaItem(CandleItem, ConfigurableIndicator):
 
         painter.end()
         return picture
+
+    def get_current_values(self) -> Dict[str, Any]:
+        """
+        获取当前指标值，用于AI分析
+
+        Returns:
+            包含当前SMA数据的字典
+        """
+        bars = self._manager.get_all_bars()
+        if not bars:
+            return {}
+
+        ix = len(bars) - 1
+        sma_values = {}
+        prev_sma_values = {}
+
+        # 使用get_sma_value确保数据被计算（即使指标被隐藏）
+        for sma_window in self.sma_data.keys():
+            value = self.get_sma_value(ix, sma_window)
+            if not np.isnan(value):
+                sma_values[sma_window] = value
+
+            prev_value = self.get_sma_value(ix - 1, sma_window)
+            if not np.isnan(prev_value):
+                prev_sma_values[sma_window] = prev_value
+
+        if not sma_values:
+            return {}
+
+        # 获取当前价格
+        bar = bars[ix]
+        current_price = bar.close_price if bar else 0
+
+        # 判断趋势（基于短期和长期SMA）
+        windows = sorted(sma_values.keys())
+        if len(windows) >= 2:
+            short_window = windows[0]
+            long_window = windows[-1]
+            short_sma = sma_values[short_window]
+            long_sma = sma_values[long_window]
+            trend = "up" if short_sma > long_sma else "down" if short_sma < long_sma else "neutral"
+        else:
+            trend = "unknown"
+
+        return {
+            "values": {k: round(v, 2) for k, v in sma_values.items()},
+            "previous_values": {k: round(v, 2) for k, v in prev_sma_values.items()} if prev_sma_values else {},
+            "trend": trend,
+            "current_price": round(current_price, 2),
+            "windows": windows
+        }
 
     def get_info_text(self, ix: int) -> str:
         """
@@ -405,6 +439,30 @@ class MultiSmaItem(CandleItem, ConfigurableIndicator):
 
         return "\n".join(info_lines)
 
+    def update_history(self, history) -> None:
+        """重写update_history，清除缓存触发重算"""
+        for w in self.sma_data:
+            self.sma_data[w].clear()
+        super().update_history(history)
+
+    def update_bar(self, bar: BarData) -> None:
+        """重写update_bar，清除缓存让下次访问触发重算"""
+        for w in self.sma_data:
+            self.sma_data[w].clear()
+        super().update_bar(bar)
+
+    def update_history(self, history) -> None:
+        """重写update_history，清除缓存触发重算"""
+        for k in self.sma_data:
+            self.sma_data[k].clear()
+        super().update_history(history)
+
+    def update_bar(self, bar: BarData) -> None:
+        """重写update_bar，清除缓存让下次访问触发重算"""
+        for k in self.sma_data:
+            self.sma_data[k].clear()
+        super().update_bar(bar)
+
     def clear_all(self) -> None:
         """清除所有数据"""
         super().clear_all()
@@ -437,11 +495,11 @@ class MultiSmaItem(CandleItem, ConfigurableIndicator):
                     # 重新设置画笔和数据
                     self.lines.clear()
                     self.sma_data.clear()
-                    
+
                     colors = [
-                        (100, 100, 255),    # 蓝色
-                        (255, 255, 0),      # 黄色
-                        (255, 0, 255),      # 紫色
+                        (255, 255, 255),    # 白色 - 短线
+                        (255, 0, 255),      # 紫色 - 中线
+                        (100, 100, 255),    # 蓝色 - 慢线
                         (0, 255, 255),      # 青色
                         (255, 128, 0),      # 橙色
                         (128, 255, 128),    # 浅绿色
@@ -484,11 +542,11 @@ class MultiSmaItem(CandleItem, ConfigurableIndicator):
                         # 重新设置画笔和数据
                         self.lines.clear()
                         self.sma_data.clear()
-                        
+
                         colors = [
-                            (100, 100, 255),    # 蓝色
-                            (255, 255, 0),      # 黄色
-                            (255, 0, 255),      # 紫色
+                            (255, 255, 255),    # 白色 - 短线
+                            (255, 0, 255),      # 紫色 - 中线
+                            (100, 100, 255),    # 蓝色 - 慢线
                             (0, 255, 255),      # 青色
                             (255, 128, 0),      # 橙色
                             (128, 255, 128),    # 浅绿色
@@ -509,7 +567,7 @@ class MultiSmaItem(CandleItem, ConfigurableIndicator):
                 # 重新初始化
                 self.lines.clear()
                 self.sma_data.clear()
-                colors = [(100, 100, 255), (255, 255, 0), (255, 0, 255), (0, 255, 255)]
+                colors = [(255, 255, 255), (255, 0, 255), (100, 100, 255), (0, 255, 255)]
                 for i, period in enumerate(self.periods):
                     color = colors[i % len(colors)]
                     self.add_sma_line(period, color, 2)
@@ -524,5 +582,5 @@ class MultiSmaItem(CandleItem, ConfigurableIndicator):
     def _get_default_config(self) -> Dict[str, Any]:
         """获取默认配置"""
         return {
-            'periods': "20,60,100"
+            'periods': "25,60,100"
         }

@@ -20,7 +20,7 @@ class LoggerManager:
     def __init__(self):
         self.base_path = Path(__file__).parent.parent.parent
         self.log_path = self.base_path / "logs"
-        self.project_name = "atmquant"
+        self.project_name = "atmtrader"
         self._initialized = False
         self._log_handlers = []
     

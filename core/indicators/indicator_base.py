@@ -14,7 +14,23 @@ from vnpy.chart.item import ChartItem
 
 class ConfigurableIndicator:
     """可配置指标的混入类"""
-    
+
+    def get_current_values(self) -> Dict[str, Any]:
+        """
+        获取指标当前值，用于AI分析
+        子类应重写此方法以提供结构化的指标数据
+
+        Returns:
+            包含当前指标值的字典，至少包含:
+            {
+                "value": float,           # 当前值
+                "previous": float,        # 前一个值
+                "trend": str,            # "up" / "down" / "neutral"
+                # 指标特定字段...
+            }
+        """
+        return {}
+
     def get_config_dialog(self, parent: QtWidgets.QWidget) -> QtWidgets.QDialog:
         """获取配置对话框 - 子类应重写此方法"""
         dialog = QtWidgets.QMessageBox(parent)
@@ -74,9 +90,31 @@ class ConfigurableIndicator:
             elif widget_type == "checkbox":
                 widget = QtWidgets.QCheckBox()
                 widget.setChecked(current_value)
+            elif widget_type == "combobox":
+                # 支持下拉框
+                widget = QtWidgets.QComboBox()
+                if isinstance(current_value, dict):
+                    options = current_value.get("options", [])
+                    value = current_value.get("value", "")
+                    labels = current_value.get("labels", {})
+
+                    for opt in options:
+                        # 如果有自定义标签，使用标签；否则使用选项值
+                        display_text = labels.get(opt, opt)
+                        widget.addItem(display_text, opt)
+
+                    # 设置当前值
+                    if value in options:
+                        index = options.index(value)
+                        widget.setCurrentIndex(index)
+                else:
+                    # 简单模式：current_value 是选项列表
+                    if isinstance(current_value, (list, tuple)):
+                        for opt in current_value:
+                            widget.addItem(str(opt), opt)
             else:
                 continue
-            
+
             layout.addRow(label + ":", widget)
             widgets[key] = widget
         
@@ -116,6 +154,11 @@ class ConfigurableIndicator:
                             widget.setText(str(value))
                         elif isinstance(widget, QtWidgets.QCheckBox):
                             widget.setChecked(value)
+                        elif isinstance(widget, QtWidgets.QComboBox):
+                            # 查找并设置默认值
+                            index = widget.findData(value)
+                            if index >= 0:
+                                widget.setCurrentIndex(index)
         
         def apply_settings():
             try:
@@ -137,19 +180,22 @@ class ConfigurableIndicator:
                             config[key] = text
                     elif isinstance(widget, QtWidgets.QCheckBox):
                         config[key] = widget.isChecked()
-                
+                    elif isinstance(widget, QtWidgets.QComboBox):
+                        # 获取当前选中的数据值
+                        config[key] = widget.currentData()
+
                 self.apply_config(config)
 
                 # 显示成功提示（避免emoji导致macOS崩溃）
                 ok_button.setText("[OK] 已应用")
                 ok_button.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; }")
-                
+
                 # 2秒后恢复按钮
                 QtCore.QTimer.singleShot(2000, lambda: (
                     ok_button.setText("应用"),
                     ok_button.setStyleSheet("")
                 ))
-                
+
             except Exception as e:
                 QtWidgets.QMessageBox.critical(dialog, "配置失败", f"应用设置时发生错误：\n{str(e)}")
         

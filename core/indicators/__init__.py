@@ -36,6 +36,13 @@ __all__ = [
     "DmiItem",
 ]
 
+# Kalman指标（付费版）
+try:
+    from .kalman_item import KalmanItem
+    __all__.append("KalmanItem")
+except ImportError:
+    pass
+
 # ==================== 扩展指标（条件导入，需额外安装） ====================
 
 # 自适应MACD豪华版
@@ -84,5 +91,26 @@ except ImportError:
 try:
     from .wavetrend_item import WaveTrendItem
     __all__.append("WaveTrendItem")
+except ImportError:
+    pass
+
+# Smart Money Concept指标
+try:
+    from .smc import SmartMoneyConceptItem
+    __all__.append("SmartMoneyConceptItem")
+except ImportError:
+    pass
+
+# K线形态识别指标
+try:
+    from .candlestick_patterns_item import CandlestickPatternsItem
+    __all__.append("CandlestickPatternsItem")
+except ImportError:
+    pass
+
+# 谐波形态指标
+try:
+    from .harmonic_pattern_item import HarmonicPatternItem
+    __all__.append("HarmonicPatternItem")
 except ImportError:
     pass

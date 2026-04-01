@@ -105,6 +105,11 @@ class ExtendableViewBox(pg.ViewBox):
         drag_distance = y_pos - self._drag_start_pos
         original_height = self._original_y_range[1] - self._original_y_range[0]
 
+        # 防止除零错误
+        if original_height == 0:
+            ev.accept()
+            return
+
         if drag_distance > 0:
             extend_ratio = min(drag_distance / original_height, 3.0)
             new_top = self._original_y_range[1] + original_height * extend_ratio
@@ -125,6 +130,11 @@ class ExtendableViewBox(pg.ViewBox):
         y_pos = pos.y()
         drag_distance = y_pos - self._drag_start_pos
         original_height = self._original_y_range[1] - self._original_y_range[0]
+
+        # 防止除零错误
+        if original_height == 0:
+            ev.accept()
+            return
 
         if drag_distance < 0:
             extend_ratio = min(abs(drag_distance) / original_height, 3.0)

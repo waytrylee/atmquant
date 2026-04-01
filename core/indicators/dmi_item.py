@@ -7,7 +7,6 @@ DMI方向性运动指标
 
 from typing import Dict, Any, Tuple
 import numpy as np
-import talib
 import pyqtgraph as pg
 
 from vnpy.trader.ui import QtCore, QtGui, QtWidgets
@@ -16,7 +15,7 @@ from vnpy.chart.item import ChartItem
 from vnpy.chart.manager import BarManager
 
 from .indicator_base import ConfigurableIndicator
-from .dyna_array_manager import DynaArrayManager
+from .calculators.dmi_calculator import DMICalculator
 
 
 class DmiItem(ChartItem, ConfigurableIndicator):
@@ -44,86 +43,54 @@ class DmiItem(ChartItem, ConfigurableIndicator):
         # 缓存设置
         self._values_ranges: Dict[Tuple[int, int], Tuple[float, float]] = {}
         
-        # 动态数组管理器
-        self.dyna_am = DynaArrayManager(2*max(N, M))
-        
         # 数据缓存
         self.dmi_data: Dict[int, Tuple[float, float, float, float]] = {}  # (PDI,MDI,ADX,ADXR)
-        self._to_update = True  # 标记需要更新
+        self._needs_recalc = True
+
+    def _ensure_calculated(self) -> None:
+        """全量计算 DMI 指标，委托给 DMICalculator"""
+        if not self._needs_recalc and self.dmi_data:
+            return
+
+        bars = self._manager.get_all_bars()
+        if not bars or len(bars) < self.N + self.M:
+            return
+
+        highs = np.array([bar.high_price for bar in bars])
+        lows = np.array([bar.low_price for bar in bars])
+        closes = np.array([bar.close_price for bar in bars])
+
+        try:
+            pdi, mdi, adx, adxr = DMICalculator.compute_arrays(
+                highs, lows, closes, self.N, self.M
+            )
+
+            self.dmi_data.clear()
+            for n in range(len(adx)):
+                if not any(np.isnan(v) for v in [pdi[n], mdi[n], adx[n], adxr[n]]):
+                    self.dmi_data[n] = (float(pdi[n]), float(mdi[n]), float(adx[n]), float(adxr[n]))
+            self._needs_recalc = False
+        except Exception:
+            pass
 
     def update_history(self, history) -> None:
         """重写update_history方法"""
-        self.dmi_data.clear()  # 清除旧数据
-        self.dyna_am = DynaArrayManager(2*max(self.N, self.M))  # 重新初始化
-        for bar in history:
-            self.dyna_am.update_bar(bar)
+        self.dmi_data.clear()
+        self._needs_recalc = True
         super().update_history(history)
-        self._to_update = True  # 标记需要更新
 
     def update_bar(self, bar: BarData) -> None:
         """重写update_bar方法"""
-        self.dyna_am.update_bar(bar)
-        # 主动触发最新值的计算
-        if self.dyna_am.inited:
-            ix = len(self._manager._bars) - 1
-            try:
-                pdi, mdi, adx, adxr = self.dyna_am.dmi(N=self.N, M=self.M)
-                self.dmi_data[ix] = (pdi, mdi, adx, adxr)
-            except:
-                pass
-            self._to_update = True  # 标记需要更新
+        self._needs_recalc = True
         super().update_bar(bar)
 
     def _get_dmi_value(self, ix: int) -> Tuple[float, float, float, float]:
         """获取指定索引的 DMI 值"""
-        max_ix = self._manager.get_count()-1
         invalid_data = (np.nan, np.nan, np.nan, np.nan)
-        
-        # 检查索引有效性
-        if ix < 0 or ix > max_ix:
+        if ix < 0:
             return invalid_data
-
-        # 初始化计算所有值 - 确保在任何情况下都会重新计算所有值
-        if not self.dmi_data or self._to_update:
-            bars = self._manager.get_all_bars()
-            if not bars or len(bars) < self.N + self.M:
-                return invalid_data
-                
-            highs = np.array([bar.high_price for bar in bars])
-            lows = np.array([bar.low_price for bar in bars])
-            closes = np.array([bar.close_price for bar in bars])
-            
-            # 使用talib计算DMI指标
-            try:
-                pdi = talib.PLUS_DI(highs, lows, closes, timeperiod=self.N)
-                mdi = talib.MINUS_DI(highs, lows, closes, timeperiod=self.N)
-                adx = talib.ADX(highs, lows, closes, timeperiod=self.N)
-                adxr = talib.ADXR(highs, lows, closes, timeperiod=self.M)
-
-                for n in range(len(adx)):
-                    if not (np.isnan(pdi[n]) or np.isnan(mdi[n]) or np.isnan(adx[n]) or np.isnan(adxr[n])):
-                        self.dmi_data[n] = (pdi[n], mdi[n], adx[n], adxr[n])
-            except Exception:
-                pass  # 静默失败
-
-            self._to_update = False  # 重置更新标记
-
-        # 返回已计算的值
-        if ix in self.dmi_data:
-            return self.dmi_data[ix]
-
-        # 对于新的K线，使用动态计算
-        if self.dyna_am.inited:
-            try:
-                pdi, mdi, adx, adxr = self.dyna_am.dmi(N=self.N, M=self.M)
-                # 确保返回tuple类型
-                dmi_value = (pdi, mdi, adx, adxr)
-                self.dmi_data[ix] = dmi_value
-                return dmi_value
-            except:
-                pass
-
-        return invalid_data
+        self._ensure_calculated()
+        return self.dmi_data.get(ix, invalid_data)
 
     def _draw_bar_picture(self, ix: int, bar: BarData) -> QtGui.QPicture:
         """绘制DMI"""
@@ -143,8 +110,8 @@ class DmiItem(ChartItem, ConfigurableIndicator):
             
             # 确保获取了有效的DMI值
             if np.isnan(dmi_value[0]) or np.isnan(last_dmi_value[0]):
-                # 如果无效，尝试重新计算整个数据集
-                self._to_update = True
+                # 如果无效，标记需要重算
+                self._needs_recalc = True
                 dmi_value = self._get_dmi_value(ix)
                 last_dmi_value = self._get_dmi_value(ix - 1)
             
@@ -181,6 +148,63 @@ class DmiItem(ChartItem, ConfigurableIndicator):
     def get_y_range(self, min_ix: int = None, max_ix: int = None) -> Tuple[float, float]:
         """获取Y轴范围"""
         return (0.0, 100.0)  # DMI指标范围固定为0-100
+
+    def get_current_values(self) -> Dict[str, Any]:
+        """
+        获取当前指标值，用于AI分析
+
+        Returns:
+            包含当前DMI数据的字典
+        """
+        bars = self._manager.get_all_bars()
+        if not bars:
+            return {}
+
+        ix = len(bars) - 1
+
+        # 使用_get_dmi_value确保数据被计算（即使指标被隐藏）
+        dmi_values = self._get_dmi_value(ix)
+        if all(np.isnan(val) for val in dmi_values):
+            return {}
+
+        pdi, mdi, adx, adxr = dmi_values
+
+        # 获取前一个数据
+        prev_dmi_values = self._get_dmi_value(ix - 1)
+        prev_pdi = prev_dmi_values[0] if not all(np.isnan(val) for val in prev_dmi_values) else None
+        prev_mdi = prev_dmi_values[1] if not all(np.isnan(val) for val in prev_dmi_values) else None
+
+        # 获取当前价格
+        bar = bars[ix]
+        current_price = bar.close_price if bar else 0
+
+        # 确定趋势
+        trend = "neutral"
+        if pdi > mdi:
+            trend = "up"
+        elif mdi > pdi:
+            trend = "down"
+
+        # 确定趋势强度
+        strength = "weak"
+        adx_strength = adx if adx else 0
+        if adx_strength > 40:
+            strength = "strong"
+        elif adx_strength > 25:
+            strength = "moderate"
+
+        return {
+            "pdi": round(pdi, 2),
+            "mdi": round(mdi, 2),
+            "adx": round(adx, 2),
+            "adxr": round(adxr, 2),
+            "previous_pdi": round(prev_pdi, 2) if prev_pdi is not None else None,
+            "previous_mdi": round(prev_mdi, 2) if prev_mdi is not None else None,
+            "trend": trend,
+            "trend_strength": strength,
+            "current_price": round(current_price, 2),
+            "adx_trend_strength": "strong" if adx_strength > 40 else "moderate" if adx_strength > 25 else "weak"
+        }
 
     def get_info_text(self, ix: int) -> str:
         """获取DMI信息文本，包含数值和交易指导"""
@@ -401,8 +425,7 @@ class DmiItem(ChartItem, ConfigurableIndicator):
         super().clear_all()
         self.dmi_data.clear()
         self._bar_picutures.clear()
-        self.dyna_am = DynaArrayManager(2*max(self.N, self.M))
-        self._to_update = True  # 标记需要更新
+        self._needs_recalc = True
         self.update()
 
     # 配置相关方法
@@ -422,8 +445,7 @@ class DmiItem(ChartItem, ConfigurableIndicator):
         # 重新初始化
         self.dmi_data.clear()
         self._values_ranges.clear()
-        self.dyna_am = DynaArrayManager(2*max(self.N, self.M))
-        self._to_update = True
+        self._needs_recalc = True
         self.update()
 
     def get_current_config(self) -> Dict[str, Any]:
@@ -432,7 +454,7 @@ class DmiItem(ChartItem, ConfigurableIndicator):
 
     def _get_default_config(self) -> Dict[str, Any]:
         """获取默认配置"""
-        return {'N': 14, 'M': 7}
+        return {'N': 14, 'M': 14}
 
     def _get_config_help_text(self) -> str:
         """获取配置帮助文本"""

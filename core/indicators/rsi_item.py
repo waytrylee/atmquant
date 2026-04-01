@@ -7,7 +7,6 @@ RSI相对强弱指标
 
 from typing import Dict, Any, Tuple
 import numpy as np
-import talib
 import pyqtgraph as pg
 
 from vnpy.trader.ui import QtCore, QtGui, QtWidgets
@@ -16,6 +15,7 @@ from vnpy.chart.item import ChartItem
 from vnpy.chart.manager import BarManager
 
 from .indicator_base import ConfigurableIndicator
+from .calculators.rsi_calculator import RSICalculator
 
 
 class RsiItem(ChartItem, ConfigurableIndicator):
@@ -66,46 +66,25 @@ class RsiItem(ChartItem, ConfigurableIndicator):
         self.rsi_long_threshold = long_threshold
         self.rsi_short_threshold = short_threshold
 
+    def _ensure_calculated(self) -> None:
+        """全量计算 RSI 数据，委托给 RSICalculator"""
+        if self.rsi_data:
+            return
+        bars = self._manager.get_all_bars()
+        if not bars or len(bars) < self.rsi_window:
+            return
+        close_array = np.array([bar.close_price for bar in bars])
+        rsi_array = RSICalculator.compute_array(close_array, self.rsi_window)
+        for n, value in enumerate(rsi_array):
+            if not np.isnan(value):
+                self.rsi_data[n] = value
+
     def get_rsi_value(self, ix: int) -> float:
         """获取RSI值"""
         if ix < 0:
             return 50
-
-        # 当初始化时，计算所有rsi值
-        if not self.rsi_data:
-            bars = self._manager.get_all_bars()
-            close_data = [bar.close_price for bar in bars]
-            rsi_array = talib.RSI(np.array(close_data), self.rsi_window)
-
-            for n, value in enumerate(rsi_array):
-                if not np.isnan(value):
-                    self.rsi_data[n] = value
-
-        # 返回已计算的值
-        if ix in self.rsi_data:
-            return self.rsi_data[ix]
-
-        # 计算新值
-        close_data = []
-        for n in range(max(0, ix - self.rsi_window), ix + 1):
-            bar = self._manager.get_bar(n)
-            if bar is not None:
-                close_data.append(bar.close_price)
-            else:
-                # 如果bar为None，使用前一个有效值或默认值
-                if close_data:
-                    close_data.append(close_data[-1])
-                else:
-                    close_data.append(0.0)
-
-        if len(close_data) >= self.rsi_window:
-            rsi_array = talib.RSI(np.array(close_data), self.rsi_window)
-            rsi_value = rsi_array[-1]
-            if not np.isnan(rsi_value):
-                self.rsi_data[ix] = rsi_value
-                return rsi_value
-
-        return 50.0
+        self._ensure_calculated()
+        return self.rsi_data.get(ix, 50.0)
 
     def _draw_bar_picture(self, ix: int, bar: BarData) -> QtGui.QPicture:
         """绘制RSI"""
@@ -181,6 +160,58 @@ class RsiItem(ChartItem, ConfigurableIndicator):
     def get_y_range(self, min_ix: int = None, max_ix: int = None) -> Tuple[float, float]:
         """获取Y轴范围"""
         return (15.0, 85.0)
+
+    def get_current_values(self) -> Dict[str, Any]:
+        """
+        获取当前指标值，用于AI分析
+
+        Returns:
+            包含当前RSI数据的字典
+        """
+        bars = self._manager.get_all_bars()
+        if not bars:
+            return {}
+
+        ix = len(bars) - 1
+
+        # 使用get_rsi_value确保数据被计算（即使指标被隐藏）
+        rsi_value = self.get_rsi_value(ix)
+        if rsi_value == 50 and ix < self.rsi_window:  # 数据不足
+            return {}
+
+        prev_rsi_value = self.get_rsi_value(ix - 1)
+
+        # 获取当前价格
+        bar = bars[ix]
+        current_price = bar.close_price if bar else 0
+
+        # 判断超买超卖
+        overbought = rsi_value >= self.rsi_long_threshold
+        oversold = rsi_value <= self.rsi_short_threshold
+
+        # 判断背离（如果有背离数据）
+        divergence = "none"
+        if hasattr(self, 'start_bull_indices') and hasattr(self, 'end_bull_indices'):
+            if ix in self.start_bull_indices or ix in self.end_bull_indices:
+                divergence = "bullish"
+        if hasattr(self, 'start_bear_indices') and hasattr(self, 'end_bear_indices'):
+            if ix in self.start_bear_indices or ix in self.end_bear_indices:
+                if divergence != "bullish":
+                    divergence = "bearish"
+
+        return {
+            "value": round(rsi_value, 1),
+            "previous": round(prev_rsi_value, 1) if prev_rsi_value != 50 else None,
+            "trend": "up" if prev_rsi_value != 50 and rsi_value > prev_rsi_value else "down" if prev_rsi_value != 50 and rsi_value < prev_rsi_value else "neutral",
+            "overbought": overbought,
+            "oversold": oversold,
+            "divergence": divergence,
+            "current_price": round(current_price, 2),
+            "thresholds": {
+                "long": self.rsi_long_threshold,
+                "short": self.rsi_short_threshold
+            }
+        }
 
     def get_info_text(self, ix: int) -> str:
         """获取RSI信息文本，包含数值和交易指导"""
@@ -319,12 +350,8 @@ class RsiItem(ChartItem, ConfigurableIndicator):
         super().update_history(history)
 
     def update_bar(self, bar: BarData) -> None:
-        """更新单个K线时清理缓存"""
-        # 清理最后几个数据点的缓存
-        bar_count = self._manager.get_count()
-        keys_to_remove = [k for k in self.rsi_data.keys() if k >= bar_count - 10]
-        for key in keys_to_remove:
-            self.rsi_data.pop(key, None)
+        """更新单个K线时清空缓存，触发全量重算"""
+        self.rsi_data.clear()
         super().update_bar(bar)
 
     # 配置相关方法

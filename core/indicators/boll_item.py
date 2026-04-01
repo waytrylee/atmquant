@@ -6,13 +6,13 @@
 
 from typing import Dict, Tuple, Any
 import numpy as np
-import talib
 from vnpy.trader.object import BarData
 from vnpy.chart.item import CandleItem
 from vnpy.trader.ui import QtGui, QtCore, QtWidgets
 import pyqtgraph as pg
 
 from .indicator_base import ConfigurableIndicator
+from .calculators.boll_calculator import BollCalculator
 
 
 class BollItem(CandleItem, ConfigurableIndicator):
@@ -43,70 +43,33 @@ class BollItem(CandleItem, ConfigurableIndicator):
         # 数据缓存
         self.boll_data = {}
 
-    def get_boll_value(self, ix: int):
-        """
-        获取指定窗口大小的 BOLL 值 - 参考原始代码
-        """
-        if ix < self.boll_window - 1:
-            return 0
+    def _ensure_calculated(self) -> None:
+        """全量计算 BOLL 数据（惰性 + 缓存），委托给 BollCalculator"""
+        if self.boll_data:
+            return
+        bars = self._manager.get_all_bars()
+        if not bars or len(bars) < self.boll_window:
+            return
 
-        # When initialize, calculate all boll value
-        if not self.boll_data:
-            bars = self._manager.get_all_bars()
-            close_data = [bar.close_price for bar in bars]
-            upper_array, middle_array, lower_array = talib.BBANDS(
-                np.array(close_data),
-                timeperiod=self.boll_window,
-                # number of non-biased standard deviations from the mean
-                nbdevup=self.std_dev,
-                nbdevdn=self.std_dev,
-                # Moving average type: simple moving average here
-                matype=0
-            )
+        close_array = np.array([bar.close_price for bar in bars])
+        upper_array, middle_array, lower_array = BollCalculator.compute_arrays(
+            close_array, self.boll_window, self.std_dev
+        )
 
-            for n, value in enumerate(upper_array):
-                if n < (self.boll_window - 1):
-                    continue
+        for n in range(len(upper_array)):
+            if not np.isnan(upper_array[n]):
                 self.boll_data[n] = {
-                    "upper": value,
-                    "middle": middle_array[n],
-                    "lower": lower_array[n]
+                    "upper": float(upper_array[n]),
+                    "middle": float(middle_array[n]),
+                    "lower": float(lower_array[n]),
                 }
 
-        # Return if already calculated
-        if ix in self.boll_data:
-            return self.boll_data[ix]
-
-        # Else calculate new value
-        close_data = []
-        for n in range(ix - self.boll_window, ix + 1):
-            bar = self._manager.get_bar(n)
-            if bar is not None:  # 添加检查，确保bar不为None
-                close_data.append(bar.close_price)
-            else:
-                # 如果bar为None，使用前一个有效值或默认值
-                if close_data:
-                    close_data.append(close_data[-1])  # 使用前一个值
-                else:
-                    close_data.append(0.0)  # 使用默认值
-
-        upper_array, middle_array, lower_array = talib.BBANDS(
-            np.array(close_data),
-            timeperiod=self.boll_window,
-            # number of non-biased standard deviations from the mean
-            nbdevup=self.std_dev,
-            nbdevdn=self.std_dev,
-            # Moving average type: simple moving average here
-            matype=0
-        )
-        boll_value = {
-            "upper": upper_array[-1],
-            "middle": middle_array[-1],
-            "lower": lower_array[-1]
-        }
-        self.boll_data[ix] = boll_value
-
-        return boll_value
+    def get_boll_value(self, ix: int):
+        """获取指定索引的 BOLL 值"""
+        if ix < self.boll_window - 1:
+            return 0
+        self._ensure_calculated()
+        return self.boll_data.get(ix, 0)
 
     def _draw_bar_picture(self, ix: int, bar: BarData) -> QtGui.QPicture:
         """
@@ -155,6 +118,63 @@ class BollItem(CandleItem, ConfigurableIndicator):
         # Finish
         painter.end()
         return picture
+
+    def get_current_values(self) -> Dict[str, Any]:
+        """
+        获取当前指标值，用于AI分析
+
+        Returns:
+            包含当前布林带数据的字典
+        """
+        bars = self._manager.get_all_bars()
+        if not bars:
+            return {}
+
+        ix = len(bars) - 1
+
+        # 使用get_boll_value确保数据被计算（即使指标被隐藏）
+        boll_value = self.get_boll_value(ix)
+        if boll_value == 0:
+            return {}
+
+        # 获取前一个数据
+        prev_boll_value = self.get_boll_value(ix - 1)
+        if prev_boll_value == 0:
+            prev_boll_value = None
+
+        # 获取当前价格
+        bar = bars[ix]
+        current_price = bar.close_price if bar else 0
+
+        upper = boll_value['upper']
+        middle = boll_value['middle']
+        lower = boll_value['lower']
+
+        # 计算布林带宽度
+        width = upper - lower
+
+        # 判断挤压状态
+        squeeze = False
+        if prev_boll_value:
+            prev_width = prev_boll_value['upper'] - prev_boll_value['lower']
+            if width < prev_width * 0.8:
+                squeeze = True
+
+        return {
+            "upper": round(upper, 2),
+            "middle": round(middle, 2),
+            "lower": round(lower, 2),
+            "previous_upper": round(prev_boll_value['upper'], 2) if prev_boll_value else None,
+            "previous_middle": round(prev_boll_value['middle'], 2) if prev_boll_value else None,
+            "previous_lower": round(prev_boll_value['lower'], 2) if prev_boll_value else None,
+            "width": round(width, 2),
+            "squeeze": squeeze,
+            "current_price": round(current_price, 2),
+            "parameters": {
+                "window": self.boll_window,
+                "std_dev": self.std_dev
+            }
+        }
 
     def get_info_text(self, ix: int) -> str:
         """获取布林带信息文本，包含数值和交易指导"""
@@ -246,6 +266,7 @@ class BollItem(CandleItem, ConfigurableIndicator):
                             info_lines.append("警惕: 快速下跌后易出现反弹")
 
             # 布林带宽度分析 - 波动性指标
+            width_change = None
             if prev_width and prev_width > 0:
                 width_change = (width - prev_width) / prev_width * 100
 
@@ -337,6 +358,16 @@ class BollItem(CandleItem, ConfigurableIndicator):
             return "\n".join(info_lines)
         else:
             return f"BOLL({self.boll_window}) - 数据不足"
+
+    def update_history(self, history) -> None:
+        """重写update_history，清除缓存触发重算"""
+        self.boll_data.clear()
+        super().update_history(history)
+
+    def update_bar(self, bar: BarData) -> None:
+        """重写update_bar，清除缓存让下次访问触发重算"""
+        self.boll_data.clear()
+        super().update_bar(bar)
 
     def clear_all(self) -> None:
         """清除所有数据"""
