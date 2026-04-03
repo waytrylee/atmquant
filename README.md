@@ -237,6 +237,12 @@ atmquant/                          # 项目根目录
     - 思维链提取与JSON修复
     - 双层风控体系（硬限制+软限制）
 
+24. **[以AI量化为生：24.回测结果存储与策略参数管理](https://mp.weixin.qq.com/s/nIEAYOQutAUJKy8C5Dnj6w)**
+    - 回测成交与AI决策双表存储架构（MySQL ORM模型）
+    - 按品种分区的JSON参数管理（StrategyParamManager）
+    - 参数自动加载机制与优先级设计
+    - 合约号自动归一化与旧格式迁移
+
 ---
 
 ### 量化指标解码系列（技术指标研究）
