@@ -77,7 +77,7 @@ class SingleSymbolAIStrategy(BaseCtaStrategy):
 
     # 默认参数值
     ai_model: str = "deepseek-chat"
-    api_key: str = "sk-d59d492808494703aa3d2418bee2df54"
+    api_key: str = ""
     primary_timeframe: str = "1h"
     secondary_timeframe: str = "15m"
     decision_interval: int = 1
